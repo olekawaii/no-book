@@ -50,7 +50,7 @@ typedef enum {
 } Tool;
 
 typedef struct {
-    int             thickness;
+    uint8_t         thickness;
     ColorT          color;
 } BrushOptions;
 
@@ -279,8 +279,11 @@ plotLine(int x0, int y0, int x1, int y1, State *s) {
     }
 }
 
+#include "vector.c"
+
 int 
 main() {
+    test();
     State state = {
         .width = CANVAS_WIDTH,
         .height = CANVAS_HEIGHT,
