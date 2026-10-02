@@ -24,6 +24,16 @@ typedef enum {
     Black      = 7,
 } ColorT;
 
+int min(int x, int y) {
+    if (x < y) return x;
+    return y;
+}
+
+int max(int x, int y) {
+    if (x > y) return x;
+    return y;
+}
+
 #include "themes.c"
 
 /*
@@ -54,6 +64,8 @@ typedef struct {
     ColorT          color;
 } BrushOptions;
 
+#include "vector.c"
+
 typedef struct {
     int             width;
     int             height;
@@ -64,6 +76,9 @@ typedef struct {
     Color         * theme;
     bool            needsRedraw;
     Markings        markings;
+    StrokeHistory   strokeHistory;
+    uint16_t      * gridOfIndecies;
+    Color         * colorGrid;
 } State;
 
 ColorT
@@ -134,16 +149,6 @@ drawCanvas(State *state, Color *pixels) {
     }
 }
 
-int min(int x, int y) {
-    if (x < y) return x;
-    return y;
-}
-
-int max(int x, int y) {
-    if (x > y) return x;
-    return y;
-}
-
 void 
 drawRect(int x, int y, int width, int height, Color *pixels, Color col) {
     for (int ny = y; ny < min(y + height, CANVAS_HEIGHT); ny++) {
@@ -176,12 +181,12 @@ eraseLine(State *state, int x, int y) {
                 if (isDeletingForeground) {
                     ColorT col = getFgColor(p);
                     if (col == White) continue;
-                    setFgColor(&state->grid[index], White);
+                    setFgColor(state->grid + index, White);
                 }
                 else {
                     ColorT col = getBgColor(p);
                     if (col == White) continue;
-                    setBgColor(&state->grid[index], White);
+                    setBgColor(state->grid + index, White);
                 }
                 buffer[bufferSize]   = index2;
                 bufferSize++;
@@ -226,6 +231,39 @@ applyToolToPixel(int x, int y, State *state) {
 }
 
 void 
+applyToolToPixel2(int x, int y, State *state, uint16_t strokeIndex) {
+    int index = y * state->width + x;
+    switch (state->tool) {
+    // case Eraser:
+    //     eraseLine(state, x, y);
+    //     break;
+    case Pen:
+        for (int dy = -1; dy < 2; dy++)
+            for (int dx = -1; dx < 2; dx++) {
+                if (
+                    x + dx >= state->width  || 
+                    x + dx < 0              || 
+                    y + dy >= state->height ||
+                    y + dy < 0
+                ) continue;
+                // state->gridOfIndecies[index + dy * state->width + dx] = 
+                //     strokeIndex;
+                state->colorGrid[index + dy * state->width + dx] = state->theme[state->penOptions.color];
+            }
+        break;
+    // case Highlighter:
+    //     for (int i = 0; i < state->width / 30; i++) {
+    //         if (y + i > state->height) break;
+    //         setBgColor(
+    //             &state->grid[index + i * state->width], 
+    //             state->highlighterOptions.color
+    //         );
+    //     }
+    //     break;
+    }
+}
+
+void 
 plotLineLow(int x0, int y0, int x1, int y1, State *s) {
     int dx = x1 - x0;
     int dy = y1 - y0;
@@ -238,6 +276,27 @@ plotLineLow(int x0, int y0, int x1, int y1, State *s) {
     int y = y0;
     for (int x = x0; x <= x1; x++) {
         applyToolToPixel(x, y, s);
+        if (D > 0) {
+            y += yi;
+            D += 2 * (dy - dx);
+        }
+        else D += 2 * dy;
+    }
+}
+
+void
+plotLineLow2(int x0, int y0, int x1, int y1, State *s, uint16_t index) {
+    int dx = x1 - x0;
+    int dy = y1 - y0;
+    int yi = 1;
+    if (dy < 0) {
+        yi *= -1;
+        dy *= -1;
+    }
+    int D = (2 * dy) - dx;
+    int y = y0;
+    for (int x = x0; x <= x1; x++) {
+        applyToolToPixel2(x, y, s, index);
         if (D > 0) {
             y += yi;
             D += 2 * (dy - dx);
@@ -268,6 +327,27 @@ plotLineHigh(int x0, int y0, int x1, int y1, State *s) {
 }
 
 void 
+plotLineHigh2(int x0, int y0, int x1, int y1, State *s, uint16_t index) {
+    int dx = x1 - x0;
+    int dy = y1 - y0;
+    int xi = 1;
+    if (dx < 0) {
+        xi *= -1;
+        dx *= -1;
+    }
+    int D = (2 * dx) - dy;
+    int x = x0;
+    for (int y = y0; y <= y1; y++) {
+        applyToolToPixel2(x, y, s, index);
+        if (D > 0) {
+            x += xi;
+            D += 2 * (dx - dy);
+        }
+        else D += 2 * dx;
+    }
+}
+
+void 
 plotLine(int x0, int y0, int x1, int y1, State *s) {
     if (abs(y1 - y0) < abs(x1 - x0)) {
         if (x0 > x1) plotLineLow(x1, y1, x0, y0, s);
@@ -279,11 +359,41 @@ plotLine(int x0, int y0, int x1, int y1, State *s) {
     }
 }
 
-#include "vector.c"
+void 
+plotLine2(int x0, int y0, int x1, int y1, State *s, uint16_t index) {
+    if (abs(y1 - y0) < abs(x1 - x0)) {
+        if (x0 > x1) plotLineLow2(x1, y1, x0, y0, s, index);
+        else         plotLineLow2(x0, y0, x1, y1, s, index);
+    }
+    else {
+        if (y0 > y1) plotLineHigh2(x1, y1, x0, y0, s, index);
+        else         plotLineHigh2(x0, y0, x1, y1, s, index);
+    }
+}
+
+void 
+drawCanvas2(State *state, Color *pixels) {
+    int penStrokes = state->strokeHistory.penStrokes.length;           
+    printf("strokes: %d\n", penStrokes);
+    printf("points:  %d\n", ((Stroke *) atIndex(&state->strokeHistory.penStrokes, state->strokeHistory.penStrokes.length - 1))->numPoints);
+    for (int i = 0; i < penStrokes; i++) {
+        Stroke s = *(Stroke *) atIndex(&state->strokeHistory.penStrokes, i);
+        if (s.numPoints == 0) continue;
+        for (int j = s.startingPointIndex; j < s.startingPointIndex + s.numPoints - 1; j++) {
+            Position p0 = *(Position *)atIndex(&state->strokeHistory.points, j);
+            printf("size:  %d\n" , s.startingPointIndex + s.numPoints - 1);
+            printf("index: %d\n" , j + 1);
+            Position p1 = *(Position *)atIndex(&state->strokeHistory.points, j + 1);
+            plotLine2(p0.x, p0.y, p1.x, p1.y, state, i);
+        }
+    }
+}
+
 
 int 
 main() {
     test();
+    Color    *colorGrid = malloc(CANVAS_WIDTH * CANVAS_HEIGHT * sizeof(Color));
     State state = {
         .width = CANVAS_WIDTH,
         .height = CANVAS_HEIGHT,
@@ -300,17 +410,21 @@ main() {
         .theme = rosePineDawn,
         .needsRedraw = true,
         .markings = Grid,
+        .strokeHistory = newStrokeHistory(),
+        .gridOfIndecies = calloc(CANVAS_WIDTH * CANVAS_WIDTH, sizeof(uint16_t)),
+        .colorGrid = colorGrid
     };
     float scale = 1;
     InitWindow(state.width * scale, state.height * scale, "game");
     SetTargetFPS(60);
-    Color    *colorGrid = malloc(CANVAS_WIDTH * CANVAS_HEIGHT * sizeof(Color));
 
     Vector2   previousMouse = GetMousePosition();
 
     Image     img       = GenImageColor(CANVAS_WIDTH, CANVAS_HEIGHT, BLANK);
     Texture2D texture   = LoadTextureFromImage(img);
     UnloadImage(img);
+    bool drawingStroke = false;
+    Stroke* currentStroke = NULL;
 
     while (!WindowShouldClose()) {
         BeginDrawing();
@@ -322,10 +436,44 @@ main() {
         mouse.x /= scale;
         mouse.y /= scale;
 
+        if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && !drawingStroke) {
+            // begin new stroke
+            drawingStroke            = true;
+            ColorT strokeColor       = state.penOptions.color;
+            DynamicArray *strokeList = &state.strokeHistory.penStrokes;
+            if (state.tool == Highlighter) {
+                strokeColor = state.highlighterOptions.color;
+                strokeList  = &state.strokeHistory.highlighterStrokes;
+            }
+            Stroke s = (Stroke) {
+                .numPoints                = 0,
+                .startingPointIndex       = state.strokeHistory.points.length,
+                .hidden                   = false,
+                .color                    = strokeColor
+            };
+            push(strokeList, &s);
+            currentStroke = strokeList->data + strokeList->length - 1;
+        }
+
+        if (IsMouseButtonDown(MOUSE_BUTTON_LEFT) && drawingStroke) {
+            int x0 = previousMouse.x;
+            int y0 = previousMouse.y;
+            int x1 = mouse.x;
+            int y1 = mouse.y;
+            if (abs(x0 - x1) > 2  || abs(y0 - y1) > 2) {
+                Position p = (Position) { x1, y1 };
+                push(&state.strokeHistory.points, &p);
+                currentStroke->numPoints++;
+                state.needsRedraw = true;
+            }
+        } else {
+            drawingStroke = false;
+            currentStroke = NULL;
+        }
+
         ColorT *colorptr = &state.penOptions.color;
         if (state.tool == Highlighter) colorptr = &state.highlighterOptions.color;
 
-        if       (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) printf("67\n");
         if       (IsKeyPressed(KEY_ZERO  ))   *colorptr = White;
         else if  (IsKeyPressed(KEY_ONE   ))   *colorptr = Red;
         else if  (IsKeyPressed(KEY_TWO   ))   *colorptr = Green;
@@ -356,7 +504,8 @@ main() {
         if (state.needsRedraw) {
             printf("drew frame\n");
             ClearBackground(state.theme[White]);
-            drawCanvas(&state, colorGrid);
+            memset(colorGrid, 0, CANVAS_WIDTH * CANVAS_HEIGHT * sizeof(Color));
+            drawCanvas2(&state, colorGrid);
             UpdateTexture(texture, colorGrid);
             state.needsRedraw = false;
         }
