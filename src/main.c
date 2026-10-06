@@ -9,8 +9,8 @@
 
 #include <raylib.h>
 
-#define CANVAS_WIDTH          1200
-#define CANVAS_HEIGHT         900
+#define CANVAS_WIDTH          1280
+#define CANVAS_HEIGHT         1024
 #define HIGHLIGHTER_OPACITY   0.9
 
 typedef enum {
@@ -64,7 +64,126 @@ typedef struct {
     ColorT          color;
 } BrushOptions;
 
-#include "vector.c"
+typedef struct {
+    uint16_t       x, y;
+} Position;
+
+typedef struct {
+    uint16_t       numPoints;
+    uint16_t       startingPointIndex;
+    bool           hidden;               // expensive
+    ColorT         color;
+} Stroke;
+
+typedef struct {
+    void         * data;
+    int            length;
+    int            elementSize;
+    int            capacity;
+} DynamicArray;
+
+DynamicArray 
+newDynamicArray(int elementSize) {
+    return (DynamicArray) {
+        .data        = calloc(4, elementSize),
+        .length      = 0,
+        .elementSize = elementSize,
+        .capacity    = 4,
+    };
+}
+
+typedef struct {
+    DynamicArray   points;
+    DynamicArray   highlighterStrokes;
+    DynamicArray   penStrokes;
+} StrokeHistory;
+
+StrokeHistory 
+newStrokeHistory() {
+    return (StrokeHistory) {
+        .points             = newDynamicArray(sizeof(Position)),
+        .highlighterStrokes = newDynamicArray(sizeof(Stroke)),
+        .penStrokes         = newDynamicArray(sizeof(Stroke))
+    };
+}
+
+void 
+push(DynamicArray *d, void *value) {
+    if (d->length == d->capacity) {
+        d->data = realloc(d->data, 2 * d->elementSize * d->capacity);
+        d->capacity *= 2;
+    }
+    memcpy(d->data + d->elementSize * d->length, value, d->elementSize);
+    d->length++;
+}
+
+void *
+atIndex(DynamicArray *d, int index) {
+    return d->data + index * d->elementSize;
+}
+
+// void drawStrokes(
+//     StrokeHistory   *strokes, 
+//     Color           *colorGrid, 
+//     uint16_t        *indexGrid
+// ) {
+//     
+// }
+
+void 
+gridToSvg(FILE* file, StrokeHistory v) {
+    printf(
+        "<svg \n"
+        "    width=\"391\" \n"
+        "    height=\"391\" \n"
+        "    viewBox=\"-10 -10 500 500\" \n"
+        "    xmlns=\"http://www.w3.org/2000/svg\" \n"
+        "    xmlns:xlink=\"http://www.w3.org/1999/xlink\" >\n"
+    );
+    // printf("    <rect \n");
+    // printf("        fill=\"#fff\" \n");
+    // printf("        stroke=\"#000\" \n");
+    // printf("        x=\"-70\" \n");
+    // printf("        y=\"-70\" \n");
+    // printf("        width=\"390\" \n");
+    // printf("        height=\"390\" />\n");
+    for (int i = 0; i < v.penStrokes.length; i++) {
+        Stroke s = *(Stroke*)atIndex(&v.penStrokes, i);
+        if (s.hidden) continue;
+        printf("    <polyline \n");
+        printf("        points=\"");
+        for (int p = 0; p < s.numPoints; p++) {
+            Position point = *(Position*)atIndex(&v.points, s.startingPointIndex + p);
+            printf("%d,%d ", point.x, point.y);
+        }
+        printf(
+            "\" \n"
+            "        stroke=\"red\" \n"
+            "        stroke-width=\"4\" \n"
+            "        fill=\"none\" />\n"
+        );
+    }
+    printf("</svg>\n");
+}
+
+void test() {
+    Position points[2] = { { 0, 0 }, { 250, 250 } };
+    DynamicArray dyn = newDynamicArray(sizeof(Position));
+    for (int i = 0; i < 2; i++) {
+        push(&dyn, points + i);
+    }
+    Stroke strokes[1] = { { 2, 0, false, Red } };
+    DynamicArray dyn2 = newDynamicArray(sizeof(Stroke));
+    for (int i = 0; i < 1; i++) {
+        push(&dyn2, strokes + i);
+    }
+    StrokeHistory testgrid = {
+        .points = dyn,
+        .highlighterStrokes = newDynamicArray(sizeof(Stroke)),
+        .penStrokes = dyn2,
+    };
+    gridToSvg(stdout, testgrid);
+}
 
 typedef struct {
     int             width;
@@ -238,6 +357,7 @@ applyToolToPixel2(int x, int y, State *state, uint16_t strokeIndex) {
     //     eraseLine(state, x, y);
     //     break;
     case Pen:
+        ColorT col = state->penOptions.color;
         for (int dy = -1; dy < 2; dy++)
             for (int dx = -1; dx < 2; dx++) {
                 if (
@@ -246,10 +366,41 @@ applyToolToPixel2(int x, int y, State *state, uint16_t strokeIndex) {
                     y + dy >= state->height ||
                     y + dy < 0
                 ) continue;
-                // state->gridOfIndecies[index + dy * state->width + dx] = 
-                //     strokeIndex;
-                state->colorGrid[index + dy * state->width + dx] = state->theme[state->penOptions.color];
+                int i = index + dy * state->width + dx;
+                state->colorGrid[i] = state->theme[col];
             }
+        break;
+    case Highlighter:
+        Color bg = state->theme[state->highlighterOptions.color];
+        Color w = state->theme[White];
+        float opacity = HIGHLIGHTER_OPACITY;
+        bg.r = (bg.r * (1.0 - opacity) + w.r * opacity);
+        bg.g = (bg.g * (1.0 - opacity) + w.g * opacity);
+        bg.b = (bg.b * (1.0 - opacity) + w.b * opacity);
+        Color gridbg = state->theme[state->highlighterOptions.color];
+        opacity -= 0.2;
+        gridbg.r = (gridbg.r * (1.0 - opacity) + w.r * opacity);
+        gridbg.g = (gridbg.g * (1.0 - opacity) + w.g * opacity);
+        gridbg.b = (gridbg.b * (1.0 - opacity) + w.b * opacity);
+        for (int dy = 0; dy < state->width / 30; dy++) {
+            int newX = x;
+            int newY = y + dy;
+            if (
+                newX >= state->width  || 
+                newY >= state->height
+            ) continue;
+            int gridSize = state->width / 30;
+            Color b = bg;
+            if (
+                    state->markings == Grid &&
+                    (((newY % gridSize == 0 || newX % gridSize == 0) ||
+                    ((newY - 1) % gridSize == 0 || (newX - 1) % gridSize == 0)))
+            ) {
+                b = gridbg;
+            }
+            int i = index + dy * state->width ;
+            state->colorGrid[i] = b;
+        }
         break;
     // case Highlighter:
     //     for (int i = 0; i < state->width / 30; i++) {
@@ -373,21 +524,85 @@ plotLine2(int x0, int y0, int x1, int y1, State *s, uint16_t index) {
 
 void 
 drawCanvas2(State *state, Color *pixels) {
-    int penStrokes = state->strokeHistory.penStrokes.length;           
-    printf("strokes: %d\n", penStrokes);
-    printf("points:  %d\n", ((Stroke *) atIndex(&state->strokeHistory.penStrokes, state->strokeHistory.penStrokes.length - 1))->numPoints);
-    for (int i = 0; i < penStrokes; i++) {
-        Stroke s = *(Stroke *) atIndex(&state->strokeHistory.penStrokes, i);
+    int gridSize = state->width / 30;
+    Color bg = state->theme[Black];
+    Color w = state->theme[White];
+    float opacity = HIGHLIGHTER_OPACITY;
+    bg.r = (bg.r * (1.0 - opacity) + w.r * opacity);
+    bg.g = (bg.g * (1.0 - opacity) + w.g * opacity);
+    bg.b = (bg.b * (1.0 - opacity) + w.b * opacity);
+    for (int y = 0; y < state->height + 1; y += gridSize) {
+        for (int x = 0; x < state->width; x++) {
+            pixels[y       * state->width + x] = bg;
+            pixels[(y + 1) * state->width + x] = bg;
+        }
+    }
+    for (int x = 0; x < state->width + 1; x += gridSize) {
+        for (int y = 0; y < state->height; y++) {
+            pixels[y * state->width + x    ] = bg;
+            pixels[y * state->width + x + 1] = bg;
+        }
+    }
+    Tool t = state->tool;
+    ColorT hc = state->highlighterOptions.color;
+    ColorT pc = state->penOptions        .color;
+    int numStrokes = state->strokeHistory.highlighterStrokes.length;           
+    state->tool = Highlighter;
+    for (int i = 0; i < numStrokes; i++) {
+        Stroke s = *(Stroke *) atIndex(&state->strokeHistory.highlighterStrokes, i);
         if (s.numPoints == 0) continue;
+        state->highlighterOptions.color = s.color;
         for (int j = s.startingPointIndex; j < s.startingPointIndex + s.numPoints - 1; j++) {
             Position p0 = *(Position *)atIndex(&state->strokeHistory.points, j);
-            printf("size:  %d\n" , s.startingPointIndex + s.numPoints - 1);
-            printf("index: %d\n" , j + 1);
             Position p1 = *(Position *)atIndex(&state->strokeHistory.points, j + 1);
             plotLine2(p0.x, p0.y, p1.x, p1.y, state, i);
         }
     }
+    state->tool = Pen;
+    numStrokes = state->strokeHistory.penStrokes.length;           
+    for (int i = 0; i < numStrokes; i++) {
+        Stroke s = *(Stroke *) atIndex(&state->strokeHistory.penStrokes, i);
+        if (s.numPoints == 0) continue;
+        state->penOptions.color = s.color;
+        for (int j = s.startingPointIndex; j < s.startingPointIndex + s.numPoints - 1; j++) {
+            Position p0 = *(Position *)atIndex(&state->strokeHistory.points, j);
+            Position p1 = *(Position *)atIndex(&state->strokeHistory.points, j + 1);
+            plotLine2(p0.x, p0.y, p1.x, p1.y, state, i);
+        }
+    }
+    state->tool = t;
+    state->highlighterOptions.color = hc;
+    state->penOptions.color = pc;
 }
+
+void updatePenStrokes(State *state, Color *pixels) {
+    Tool t = state->tool;
+    ColorT pc = state->penOptions.color;
+
+    state->tool = Pen;
+    int numStrokes = state->strokeHistory.penStrokes.length;           
+    for (int i = 0; i < numStrokes; i++) {
+        Stroke s = *(Stroke *) atIndex(&state->strokeHistory.penStrokes, i);
+        if (s.numPoints == 0) continue;
+        state->penOptions.color = s.color;
+        for (int j = s.startingPointIndex; j < s.startingPointIndex + s.numPoints - 1; j++) {
+            Position p0 = *(Position *)atIndex(&state->strokeHistory.points, j);
+            Position p1 = *(Position *)atIndex(&state->strokeHistory.points, j + 1);
+            plotLine2(p0.x, p0.y, p1.x, p1.y, state, i);
+        }
+    }
+
+    state->penOptions.color = pc;
+    state->tool = t;
+}
+
+// void updateHighlighterStrokes(State *state, Color *pixels) {
+//     Tool t = state->tool;
+//     ColorT pc = state->highlighterOptions.color;
+// 
+//     state->penOptions.color = pc;
+//     state->tool = t;
+// }
 
 
 int 
@@ -416,7 +631,7 @@ main() {
     };
     float scale = 1;
     InitWindow(state.width * scale, state.height * scale, "game");
-    SetTargetFPS(60);
+    SetTargetFPS(120);
 
     Vector2   previousMouse = GetMousePosition();
 
@@ -428,6 +643,7 @@ main() {
 
     while (!WindowShouldClose()) {
         BeginDrawing();
+        printf("fps: %d\n", GetFPS());
         ClearBackground(state.theme[White]);
 
         state.needsRedraw = true;
@@ -435,6 +651,10 @@ main() {
         Vector2 mouse = GetMousePosition();
         mouse.x /= scale;
         mouse.y /= scale;
+        if (mouse.x < 0) mouse.x = 0;
+        if (mouse.x >= state.width) mouse.x = state.width - 1;
+        if (mouse.y < 0) mouse.y = 0;
+        if (mouse.y >= state.width) mouse.y = state.height - 1;
 
         if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && !drawingStroke) {
             // begin new stroke
@@ -452,15 +672,20 @@ main() {
                 .color                    = strokeColor
             };
             push(strokeList, &s);
-            currentStroke = strokeList->data + strokeList->length - 1;
+            currentStroke = (Stroke *) strokeList->data + strokeList->length - 1;
         }
 
         if (IsMouseButtonDown(MOUSE_BUTTON_LEFT) && drawingStroke) {
-            int x0 = previousMouse.x;
-            int y0 = previousMouse.y;
+            Position previous = ((Position *) state
+                .strokeHistory
+                .points
+                .data) [state.strokeHistory.points.length - 1];
+            int x0 = previous.x;
+            int y0 = previous.y;
             int x1 = mouse.x;
             int y1 = mouse.y;
-            if (abs(x0 - x1) > 2  || abs(y0 - y1) > 2) {
+            int threshold = CANVAS_WIDTH / 500;
+            if (abs(x0 - x1) > threshold  || abs(y0 - y1) > threshold) {
                 Position p = (Position) { x1, y1 };
                 push(&state.strokeHistory.points, &p);
                 currentStroke->numPoints++;
@@ -510,7 +735,6 @@ main() {
             state.needsRedraw = false;
         }
         previousMouse = mouse;
-
         DrawTexturePro(
             texture,
             (Rectangle){0, 0, CANVAS_WIDTH, CANVAS_HEIGHT},
