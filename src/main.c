@@ -332,7 +332,7 @@ applyToolToPixel(int x, int y, State *state) {
                     y + dy < 0
                 ) continue;
                 setFgColor(
-                    &state->grid[index + dy * state->width + dx], 
+                    state->grid + index + dy * state->width + dx,
                     state->penOptions.color
                 );
             }
@@ -352,10 +352,23 @@ applyToolToPixel(int x, int y, State *state) {
 void 
 applyToolToPixel2(int x, int y, State *state, uint16_t strokeIndex) {
     int index = y * state->width + x;
+    //assert(state->tool != Eraser);
     switch (state->tool) {
-    // case Eraser:
-    //     eraseLine(state, x, y);
-    //     break;
+    case Eraser:
+        int i = state->gridOfIndecies[index];
+        if (i == 0) return;
+        printf("erased\n");
+        i--;
+        Stroke * stroke;
+        if (i & 1 << 15) {
+            i &= ~(1 << 15);
+            stroke = atIndex(&state->strokeHistory.highlighterStrokes, i);
+        }
+        else {
+            stroke = atIndex(&state->strokeHistory.penStrokes, i);
+        }
+        stroke->hidden = true;
+        break;
     case Pen:
         ColorT col = state->penOptions.color;
         for (int dy = -1; dy < 2; dy++)
@@ -368,6 +381,7 @@ applyToolToPixel2(int x, int y, State *state, uint16_t strokeIndex) {
                 ) continue;
                 int i = index + dy * state->width + dx;
                 state->colorGrid[i] = state->theme[col];
+                state->gridOfIndecies[i] = strokeIndex + 1;
             }
         break;
     case Highlighter:
@@ -400,17 +414,9 @@ applyToolToPixel2(int x, int y, State *state, uint16_t strokeIndex) {
             }
             int i = index + dy * state->width ;
             state->colorGrid[i] = b;
+            state->gridOfIndecies[i] = (strokeIndex + 1) | (1 << 15);
         }
         break;
-    // case Highlighter:
-    //     for (int i = 0; i < state->width / 30; i++) {
-    //         if (y + i > state->height) break;
-    //         setBgColor(
-    //             &state->grid[index + i * state->width], 
-    //             state->highlighterOptions.color
-    //         );
-    //     }
-    //     break;
     }
 }
 
@@ -527,6 +533,11 @@ drawCanvas2(State *state, Color *pixels) {
     int gridSize = state->width / 30;
     Color bg = state->theme[Black];
     Color w = state->theme[White];
+    memset(
+        state->gridOfIndecies, 
+        0, 
+        state->width * state->height * sizeof(uint16_t)
+    );
     float opacity = HIGHLIGHTER_OPACITY;
     bg.r = (bg.r * (1.0 - opacity) + w.r * opacity);
     bg.g = (bg.g * (1.0 - opacity) + w.g * opacity);
@@ -550,6 +561,7 @@ drawCanvas2(State *state, Color *pixels) {
     state->tool = Highlighter;
     for (int i = 0; i < numStrokes; i++) {
         Stroke s = *(Stroke *) atIndex(&state->strokeHistory.highlighterStrokes, i);
+        if (s.hidden) continue;
         if (s.numPoints == 0) continue;
         state->highlighterOptions.color = s.color;
         for (int j = s.startingPointIndex; j < s.startingPointIndex + s.numPoints - 1; j++) {
@@ -562,6 +574,7 @@ drawCanvas2(State *state, Color *pixels) {
     numStrokes = state->strokeHistory.penStrokes.length;           
     for (int i = 0; i < numStrokes; i++) {
         Stroke s = *(Stroke *) atIndex(&state->strokeHistory.penStrokes, i);
+        if (s.hidden) continue;
         if (s.numPoints == 0) continue;
         state->penOptions.color = s.color;
         for (int j = s.startingPointIndex; j < s.startingPointIndex + s.numPoints - 1; j++) {
@@ -631,7 +644,7 @@ main() {
     };
     float scale = 1;
     InitWindow(state.width * scale, state.height * scale, "game");
-    SetTargetFPS(120);
+    SetTargetFPS(30);
 
     Vector2   previousMouse = GetMousePosition();
 
@@ -644,7 +657,7 @@ main() {
 
     while (!WindowShouldClose()) {
         BeginDrawing();
-        printf("fps: %d\n", GetFPS());
+        //printf("fps: %d\n", GetFPS());
         ClearBackground(state.theme[White]);
 
         state.needsRedraw = true;
@@ -669,9 +682,11 @@ main() {
             if (state.tool == Highlighter) {
                 strokeColor = state.highlighterOptions.color;
             }
+            Position p = (Position) {mouse.x, mouse.y};
+            push(&state.strokeHistory.points, &p);
             Stroke s = (Stroke) {
-                .numPoints                = 0,
-                .startingPointIndex       = state.strokeHistory.points.length,
+                .numPoints                = 1,
+                .startingPointIndex       = state.strokeHistory.points.length - 1,
                 .hidden                   = false,
                 .color                    = strokeColor
             };
@@ -690,19 +705,25 @@ main() {
             int y1 = mouse.y;
             int threshold = CANVAS_WIDTH / 500;
             if (abs(x0 - x1) > threshold  || abs(y0 - y1) > threshold) {
-                if (((Stroke *) atIndex(strokeList, strokeList-> length -1))->numPoints == 0) {
-                    Position p = (Position) { mouse.x, mouse.y };
-                    push(&state.strokeHistory.points, &p);
-                    previous = p;
-                    x0 = previous.x;
-                    y0 = previous.y;
-                }
+                // if (((Stroke *) atIndex(strokeList, strokeList-> length -1))->numPoints == 0) {
+                //     Position p = (Position) { mouse.x, mouse.y };
+                //     push(&state.strokeHistory.points, &p);
+                //     previous = p;
+                //     x0 = previous.x;
+                //     y0 = previous.y;
+                // }
                 Position p = (Position) { x1, y1 };
-                push(&state.strokeHistory.points, &p);
-                currentStroke->numPoints++;
-                if (state.tool == Pen) {
+                if (state.tool == Eraser) {
                     plotLine2(x0, y0, x1, y1, &state, strokeList->length - 1);
-                } else needsFullRedraw = true;
+                    needsFullRedraw = true;
+                } 
+                else {
+                    push(&state.strokeHistory.points, &p);
+                    currentStroke->numPoints++;
+                    if (state.tool == Pen) {
+                        plotLine2(x0, y0, x1, y1, &state, strokeList->length - 1);
+                    } else needsFullRedraw = true;
+                }
                 state.needsRedraw = true;
             }
         } else {
@@ -730,7 +751,8 @@ main() {
         else if  (IsKeyPressed(KEY_L     ))   state.theme = rosePineDawn;
         else if  (IsKeyPressed(KEY_K     ))   state.theme = everforestLight;
         else if  (IsKeyPressed(KEY_N     ))   state.theme = flexokiLight;
-        else if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) { }
+        //needsFullRedraw = true; // TODO
+        //else if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) { }
         //     int x0 = previousMouse.x;
         //     int y0 = previousMouse.y;
         //     int x1 = mouse.x;
@@ -738,7 +760,7 @@ main() {
         //     plotLine(x0, y0, x1, y1, &state);
         //     state.needsRedraw = true;
         // }
-        else state.needsRedraw = false;
+        // else state.needsRedraw = false;
 
         if (state.needsRedraw || needsFullRedraw) {
             ClearBackground(state.theme[White]);
