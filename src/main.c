@@ -132,7 +132,7 @@ atIndex(DynamicArray *d, int index) {
 
 void 
 gridToSvg(FILE* file, StrokeHistory v) {
-    printf(
+    fprintf(file,
         "<svg \n"
         "    width=\"391\" \n"
         "    height=\"391\" \n"
@@ -150,20 +150,20 @@ gridToSvg(FILE* file, StrokeHistory v) {
     for (int i = 0; i < v.penStrokes.length; i++) {
         Stroke s = *(Stroke*)atIndex(&v.penStrokes, i);
         if (s.hidden) continue;
-        printf("    <polyline \n");
-        printf("        points=\"");
+        fprintf(file, "    <polyline \n");
+        fprintf(file, "        points=\"");
         for (int p = 0; p < s.numPoints; p++) {
             Position point = *(Position*)atIndex(&v.points, s.startingPointIndex + p);
-            printf("%d,%d ", point.x, point.y);
+            fprintf(file, "%d,%d ", point.x, point.y);
         }
-        printf(
+        fprintf(file,
             "\" \n"
             "        stroke=\"red\" \n"
             "        stroke-width=\"4\" \n"
             "        fill=\"none\" />\n"
         );
     }
-    printf("</svg>\n");
+    fprintf(file, "</svg>\n");
 }
 
 void test() {
@@ -640,6 +640,7 @@ main() {
     UnloadImage(img);
     bool drawingStroke = false;
     Stroke* currentStroke = NULL;
+    bool needsFullRedraw = false;
 
     while (!WindowShouldClose()) {
         BeginDrawing();
@@ -647,6 +648,7 @@ main() {
         ClearBackground(state.theme[White]);
 
         state.needsRedraw = true;
+        needsFullRedraw = false;
 
         Vector2 mouse = GetMousePosition();
         mouse.x /= scale;
@@ -656,14 +658,16 @@ main() {
         if (mouse.y < 0) mouse.y = 0;
         if (mouse.y >= state.width) mouse.y = state.height - 1;
 
+        DynamicArray *strokeList = &state.strokeHistory.penStrokes;
+        if (state.tool == Highlighter) {
+            strokeList  = &state.strokeHistory.highlighterStrokes;
+        }
         if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && !drawingStroke) {
             // begin new stroke
             drawingStroke            = true;
             ColorT strokeColor       = state.penOptions.color;
-            DynamicArray *strokeList = &state.strokeHistory.penStrokes;
             if (state.tool == Highlighter) {
                 strokeColor = state.highlighterOptions.color;
-                strokeList  = &state.strokeHistory.highlighterStrokes;
             }
             Stroke s = (Stroke) {
                 .numPoints                = 0,
@@ -686,9 +690,19 @@ main() {
             int y1 = mouse.y;
             int threshold = CANVAS_WIDTH / 500;
             if (abs(x0 - x1) > threshold  || abs(y0 - y1) > threshold) {
+                if (((Stroke *) atIndex(strokeList, strokeList-> length -1))->numPoints == 0) {
+                    Position p = (Position) { mouse.x, mouse.y };
+                    push(&state.strokeHistory.points, &p);
+                    previous = p;
+                    x0 = previous.x;
+                    y0 = previous.y;
+                }
                 Position p = (Position) { x1, y1 };
                 push(&state.strokeHistory.points, &p);
                 currentStroke->numPoints++;
+                if (state.tool == Pen) {
+                    plotLine2(x0, y0, x1, y1, &state, strokeList->length - 1);
+                } else needsFullRedraw = true;
                 state.needsRedraw = true;
             }
         } else {
@@ -716,22 +730,25 @@ main() {
         else if  (IsKeyPressed(KEY_L     ))   state.theme = rosePineDawn;
         else if  (IsKeyPressed(KEY_K     ))   state.theme = everforestLight;
         else if  (IsKeyPressed(KEY_N     ))   state.theme = flexokiLight;
-        else if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
-            int x0 = previousMouse.x;
-            int y0 = previousMouse.y;
-            int x1 = mouse.x;
-            int y1 = mouse.y;
-            plotLine(x0, y0, x1, y1, &state);
-            state.needsRedraw = true;
-        }
+        else if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) { }
+        //     int x0 = previousMouse.x;
+        //     int y0 = previousMouse.y;
+        //     int x1 = mouse.x;
+        //     int y1 = mouse.y;
+        //     plotLine(x0, y0, x1, y1, &state);
+        //     state.needsRedraw = true;
+        // }
         else state.needsRedraw = false;
 
-        if (state.needsRedraw) {
-            printf("drew frame\n");
+        if (state.needsRedraw || needsFullRedraw) {
             ClearBackground(state.theme[White]);
-            memset(colorGrid, 0, CANVAS_WIDTH * CANVAS_HEIGHT * sizeof(Color));
-            drawCanvas2(&state, colorGrid);
+            if (needsFullRedraw) {
+                printf("drew entire frame\n");
+                memset(colorGrid, 0, CANVAS_WIDTH * CANVAS_HEIGHT * sizeof(Color));
+                drawCanvas2(&state, colorGrid);
+            }
             UpdateTexture(texture, colorGrid);
+            printf("updated frame\n");
             state.needsRedraw = false;
         }
         previousMouse = mouse;
@@ -745,6 +762,8 @@ main() {
         );
         EndDrawing();
     }
+    FILE* f = fopen("uwu.svg", "w");
+    gridToSvg(f, state.strokeHistory);
     CloseWindow();
     free(state.grid);
     free(colorGrid);
