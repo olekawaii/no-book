@@ -73,6 +73,26 @@ typedef struct {
     int            capacity;
 } DynamicArray;
 
+struct History {
+    DynamicArray   points;
+    DynamicArray   highlighterStrokes;
+    DynamicArray   penStrokes;
+};
+
+typedef struct {
+    int                width;
+    int                height;
+    BrushOptions       penOptions;
+    BrushOptions       highlighterOptions;
+    enum Tool          tool;
+    Color            * theme;
+    bool               needsRedraw;
+    enum Markings      markings;
+    struct History     history;
+    uint16_t         * gridOfIndecies;
+    Color            * colorGrid;
+} State;
+
 DynamicArray 
 newDynamicArray(int elementSize) 
 {
@@ -83,12 +103,6 @@ newDynamicArray(int elementSize)
         .capacity    = 4,
     };
 }
-
-struct History {
-    DynamicArray   points;
-    DynamicArray   highlighterStrokes;
-    DynamicArray   penStrokes;
-};
 
 struct History 
 newhistory() 
@@ -118,27 +132,38 @@ atIndex(DynamicArray *d, int index)
 }
 
 void 
-gridToSvg(FILE* file, struct History v) 
+gridToSvg(FILE* file, State *state) 
 {
+    Color c;
+
+    float scale = 0.75;
+    struct History v = state->history;
+    int width = CANVAS_WIDTH  * scale;
+    int height = CANVAS_HEIGHT * scale;
     fprintf(file,
-        "<svg \n"
-        "    width=\"%d\" \n"
-        "    height=\"%d\" \n"
-        "    viewBox=\"0 0 %d %d\" \n"
-        "    xmlns=\"http://www.w3.org/2000/svg\" \n"
-        "    xmlns:xlink=\"http://www.w3.org/1999/xlink\" >\n",
-        CANVAS_WIDTH,
-        CANVAS_HEIGHT,
-        CANVAS_WIDTH,
-        CANVAS_HEIGHT
-    );
-    // printf("    <rect \n");
-    // printf("        fill=\"#fff\" \n");
-    // printf("        stroke=\"#000\" \n");
-    // printf("        x=\"-70\" \n");
-    // printf("        y=\"-70\" \n");
-    // printf("        width=\"390\" \n");
-    // printf("        height=\"390\" />\n");
+            "<svg \n"
+            "    width=\"%d\" \n"
+            "    height=\"%d\" \n"
+            "    viewBox=\"0 0 %d %d\" \n"
+            "    xmlns=\"http://www.w3.org/2000/svg\" \n"
+            "    xmlns:xlink=\"http://www.w3.org/1999/xlink\" >\n",
+            width,
+            height,
+            width,
+            height);
+    c = state->theme[White];
+    fprintf(file,
+            "    <rect \n"
+            "        fill=\"rgb(%d,%d,%d,255)\" \n"
+            "        stroke=\"rgb(0,0,0,0)\" \n"
+            "        x=\"0\" \n"
+            "        y=\"0\" \n"
+            "        width=\"%d\" \n"
+            "        height=\"%d\" />\n",
+            c.r, c.g, c.b,
+            width,
+            height);
+
     for (int i = 0; i < v.penStrokes.length; i++) {
         Stroke s = *(Stroke*)atIndex(&v.penStrokes, i);
         if (s.hidden) continue;
@@ -146,31 +171,24 @@ gridToSvg(FILE* file, struct History v)
         fprintf(file, "        points=\"");
         for (int p = 0; p < s.numPoints; p++) {
             Position point = *(Position*)atIndex(&v.points, s.startingPointIndex + p);
-            fprintf(file, "%d,%d ", point.x, point.y);
+            fprintf(file, 
+                    "%d,%d ", 
+                    (int)(point.x * scale), 
+                    (int)(point.y * scale));
         }
+        c = state->theme[s.color];
         fprintf(file,
             "\" \n"
-            "        stroke=\"red\" \n"
+            "        stroke=\"rgb(%d, %d, %d, 255)\" \n"
             "        stroke-width=\"4\" \n"
-            "        fill=\"none\" />\n"
+            "        fill=\"none\" />\n",
+            c.r,
+            c.g,
+            c.b
         );
     }
     fprintf(file, "</svg>\n");
 }
-
-typedef struct {
-    int                width;
-    int                height;
-    BrushOptions       penOptions;
-    BrushOptions       highlighterOptions;
-    enum Tool          tool;
-    Color            * theme;
-    bool               needsRedraw;
-    enum Markings      markings;
-    struct History     history;
-    uint16_t         * gridOfIndecies;
-    Color            * colorGrid;
-} State;
 
 void 
 applyToolToPixel2(int x, int y, State *state, uint16_t strokeIndex) {
@@ -309,7 +327,8 @@ plotLine2(int x0, int y0, int x1, int y1, State *s, uint16_t index) {
 void 
 drawCanvas2(State *state, Color *pixels) {
     enum ColorT hc, pc;
-    int gridSize = state->width / 30;
+    float gridSizeX = (float)state->width / 30;
+    float gridSizeY = state->height / (6 * 4);
     Color bg = state->theme[Black];
     Color w = state->theme[White];
     memset(
@@ -321,16 +340,16 @@ drawCanvas2(State *state, Color *pixels) {
     bg.r = (bg.r * (1.0 - opacity) + w.r * opacity);
     bg.g = (bg.g * (1.0 - opacity) + w.g * opacity);
     bg.b = (bg.b * (1.0 - opacity) + w.b * opacity);
-    for (int y = 0; y < state->height - 1; y += gridSize) {
+    for (float y = 0; y < state->height - 1; y += gridSizeY) {
         for (int x = 0; x < state->width; x++) {
-            pixels[y       * state->width + x] = bg;
-            pixels[(y + 1) * state->width + x] = bg;
+            pixels[(int)y       * state->width + x] = bg;
+            pixels[(int)(y + 1) * state->width + x] = bg;
         }
     }
-    for (int x = 0; x < state->width - 1; x += gridSize) {
+    for (float x = 0; x < state->width - 1; x += gridSizeX) {
         for (int y = 0; y < state->height; y++) {
-            pixels[y * state->width + x    ] = bg;
-            pixels[y * state->width + x + 1] = bg;
+            pixels[y * state->width + (int)x    ] = bg;
+            pixels[y * state->width + (int)x + 1] = bg;
         }
     }
     enum Tool t = state->tool;
@@ -424,7 +443,7 @@ main() {
 
     SetConfigFlags(FLAG_WINDOW_RESIZABLE);
     InitWindow(state.width, state.height, "game");
-    SetTargetFPS(30);
+    SetTargetFPS(60);
 
     //Vector2   previousMouse = GetMousePosition();
 
@@ -584,7 +603,7 @@ main() {
         EndDrawing();
     }
     FILE* f = fopen("uwu.svg", "w");
-    gridToSvg(f, state.history);
+    gridToSvg(f, &state);
     CloseWindow();
     free(state.colorGrid);
     return 0;
