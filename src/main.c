@@ -337,7 +337,6 @@ drawPenStrokes(State *state, Color *pixels)
     for (i = 0; i < numStrokes; i++) {
         s = *(struct Stroke *) atIndex(&state->history.penStrokes, i);
         if (s.hidden) continue;
-        if (s.numPoints == 0) continue;
         state->penOptions.color = s.color;
         for (j = s.pointIndex; j < s.pointIndex + s.numPoints - 1; j++) {
             p0 = *(Position *)atIndex(&state->history.points, j);
@@ -581,7 +580,13 @@ main()
                 }
                 state.needsRedraw = true;
             }
-        } else {
+        } 
+        else if (drawingStroke) {
+            int numPoints = currentStroke->numPoints;
+            if (numPoints == 1) {
+                strokeList->length--;
+                state.history.points.length--;
+            }
             drawingStroke = false;
             currentStroke = NULL;
         }
