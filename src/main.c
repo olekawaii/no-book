@@ -91,6 +91,7 @@ typedef struct {
     struct History      history;
     uint16_t          * gridOfIndecies;
     Color             * colorGrid;
+    int                 leftPadding;
 } State;
 
 DynArr 
@@ -386,7 +387,7 @@ drawGrid(State *state, Color *pixels)
     struct Stroke *s;
     Color bg;
 
-    gridThickness = 2;
+    gridThickness = state->width / ((float)CANVAS_WIDTH / 2);
     gridSizeX = (float)state->width / 30;
     gridSizeY = (float)state->height / (6 * 4);
 
@@ -466,7 +467,8 @@ newState(int width, int height)
         .markings           = Grid,
         .history            = newhistory(),
         .gridOfIndecies     = gridOfIndecies,
-        .colorGrid          = colorGrid
+        .colorGrid          = colorGrid,
+        .leftPadding        = 0
     };
     return state;
 }
@@ -496,7 +498,7 @@ main()
 
     while (!WindowShouldClose()) {
         BeginDrawing();
-        ClearBackground(state.theme[White]);
+        ClearBackground(state.theme[Cyan]);
 
         state.needsRedraw = false;
         needsFullRedraw = false;
@@ -507,7 +509,9 @@ main()
             state.height = GetRenderHeight();
             int expectedHeight = (float)state.width * 4/5;
             if (state.height < expectedHeight) {
-                state.width = (float)state.height * 5/4;
+                int newSize = (float)state.height * 5/4;
+                state.leftPadding = (state.width - newSize) / 2;
+                state.width = newSize;
             }
             else state.height = (float) state.width * 4/5;
             printf("dimensions: %dx%d\n", state.width, state.height);
@@ -526,6 +530,7 @@ main()
 
         mouse = GetMousePosition();
 
+        mouse.x -= state.leftPadding;
         mouse.x /= scalex;
         mouse.y /= scaley;
 
@@ -622,12 +627,11 @@ main()
         }
 
         if (state.needsRedraw || needsFullRedraw) {
-            ClearBackground(state.theme[White]);
             if (needsFullRedraw) {
                 //printf("drew entire frame\n");
-                memset( state.colorGrid, 
-                        0, 
-                        state.width * state.height * sizeof(Color));
+                Color c = state.theme[White];
+                for (int i = 0; i < state.width * state.height; i++)
+                    state.colorGrid[i] = c;
                 drawCanvas2(&state, state.colorGrid);
             }
             UpdateTexture(texture, state.colorGrid);
@@ -635,7 +639,10 @@ main()
             state.needsRedraw = false;
         }
         Rectangle rect = {0, 0, state.width, state.height};
-        DrawTexturePro(texture, rect, rect, (Vector2){0, 0}, 0.0, WHITE);
+        DrawTexturePro(texture, 
+                       rect, rect, 
+                       (Vector2){-state.leftPadding, 0}, 
+                       0.0, WHITE);
         EndDrawing();
     }
     FILE* f = fopen("uwu.svg", "w");
