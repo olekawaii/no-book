@@ -61,8 +61,8 @@ typedef struct {
 
 struct Stroke {
     uint16_t            numPoints;
-    uint16_t            startingPointIndex;
-    bool                hidden;               // expensive
+    uint16_t            pointIndex;
+    bool                hidden;               /* expensive */
     enum ColorT         color;
 };
 
@@ -74,9 +74,9 @@ typedef struct {
 } DynArr;
 
 struct History {
-    DynArr        points;
-    DynArr        highlighterStrokes;
-    DynArr        penStrokes;
+    DynArr              points;
+    DynArr              highlighterStrokes;
+    DynArr              penStrokes;
 };
 
 typedef struct {
@@ -136,6 +136,7 @@ gridToSvg(FILE* file, State *state)
 {
     Color c;
     struct Stroke *s;
+    int i, p;
 
     float scale = 0.75;
     struct History v = state->history;
@@ -163,13 +164,13 @@ gridToSvg(FILE* file, State *state)
             width,
             height);
 
-    for (int i = 0; i < v.penStrokes.length; i++) {
+    for (i = 0; i < v.penStrokes.length; i++) {
         s = atIndex(&v.penStrokes, i);
         if (s->hidden) continue;
         fprintf(file, "    <polyline \n");
         fprintf(file, "        points=\"");
-        for (int p = 0; p < s->numPoints; p++) {
-            Position *point = atIndex(&v.points, s->startingPointIndex + p);
+        for (p = 0; p < s->numPoints; p++) {
+            Position *point = atIndex(&v.points, s->pointIndex + p);
             fprintf(file, 
                     "%d,%d ", 
                     (int)(point->x * scale), 
@@ -319,115 +320,129 @@ plotLine2(int x0, int y0, int x1, int y1, State *s, uint16_t index)
     }
 }
 
-void updatePenStrokes(State *state, Color *pixels) 
+void 
+drawPenStrokes(State *state, Color *pixels) 
 {
-    int numStrokes, i, j;
-    enum ColorT pc;
-    enum Tool t;
+    int             numStrokes, i, j;
+    enum ColorT     col;
+    enum Tool       t;
+    struct Stroke   s;
+    Position        p0, p1;
 
     t = state->tool;
-    pc = state->penOptions.color;
+    col = state->penOptions.color;
 
     state->tool = Pen;
     numStrokes = state->history.penStrokes.length;           
     for (i = 0; i < numStrokes; i++) {
-        struct Stroke s = *(struct Stroke *) atIndex(&state->history.penStrokes, i);
+        s = *(struct Stroke *) atIndex(&state->history.penStrokes, i);
         if (s.hidden) continue;
         if (s.numPoints == 0) continue;
         state->penOptions.color = s.color;
-        for (j = s.startingPointIndex; j < s.startingPointIndex + s.numPoints - 1; j++) {
-            Position p0 = *(Position *)atIndex(&state->history.points, j);
-            Position p1 = *(Position *)atIndex(&state->history.points, j + 1);
+        for (j = s.pointIndex; j < s.pointIndex + s.numPoints - 1; j++) {
+            p0 = *(Position *)atIndex(&state->history.points, j);
+            p1 = *(Position *)atIndex(&state->history.points, j + 1);
             plotLine2(p0.x, p0.y, p1.x, p1.y, state, i);
         }
     }
 
-    state->penOptions.color = pc;
+    state->penOptions.color = col;
     state->tool = t;
 }
 
-void 
-drawCanvas2(State *state, Color *pixels) 
+void drawHighlighterStrokes(State *state, Color *pixels) 
 {
-    enum ColorT hc, pc;
-    float gridSizeX, gridSizeY;
+    int             numStrokes, i, j;
+    enum ColorT     col;
+    enum Tool       t;
+    struct Stroke   s;
+    Position        p0, p1;
 
-    gridSizeX = (float)state->width / 30;
-    gridSizeY = (float)state->height / (6 * 4);
-    memset(
-        state->gridOfIndecies, 
-        0, 
-        state->width * state->height * sizeof(uint16_t)
-    );
-    enum Tool t = state->tool;
-    hc = state->highlighterOptions.color;
-    pc = state->penOptions        .color;
-    int numStrokes = state->history.highlighterStrokes.length;           
+    t = state->tool;
+    col = state->highlighterOptions.color;
+
     state->tool = Highlighter;
-    for (int i = 0; i < numStrokes; i++) {
-        struct Stroke s = 
-            *(struct Stroke *) atIndex(&state->history.highlighterStrokes, i);
+    numStrokes = state->history.highlighterStrokes.length;           
+    for (i = 0; i < numStrokes; i++) {
+        s = *(struct Stroke *) atIndex(&state->history.highlighterStrokes, i);
         if (s.hidden) continue;
         if (s.numPoints == 0) continue;
         state->highlighterOptions.color = s.color;
-        for (int j = s.startingPointIndex; j < s.startingPointIndex + s.numPoints - 1; j++) {
-            Position p0 = *(Position *)atIndex(&state->history.points, j);
-            Position p1 = *(Position *)atIndex(&state->history.points, j + 1);
+        for (j = s.pointIndex; j < s.pointIndex + s.numPoints - 1; j++) {
+            p0 = *(Position *)atIndex(&state->history.points, j);
+            p1 = *(Position *)atIndex(&state->history.points, j + 1);
             plotLine2(p0.x, p0.y, p1.x, p1.y, state, i);
         }
     }
 
-    int gridSize = 2;
+    state->highlighterOptions.color = col;
+    state->tool = t;
+}
 
-    for (float y = 0; y < state->height - 1; y += gridSizeY) {
-        for (float x = 0; x < state->width; x++) {
-            for (int g = 0; g < gridSize; g++) {
-                int index = ((int)y + g) * state->width + x;
-                int strokeIndex = state->gridOfIndecies[index];
+void
+drawGrid(State *state, Color *pixels) 
+{
+    int g, gridThickness, index, strokeIndex;
+    float x, y, gridSizeX, gridSizeY;
+    struct Stroke *s;
+    Color bg;
+
+    gridThickness = 2;
+    gridSizeX = (float)state->width / 30;
+    gridSizeY = (float)state->height / (6 * 4);
+
+    for (y = 0; y < state->height - 1; y += gridSizeY) {
+        for (x = 0; x < state->width; x++) {
+            for (g = 0; g < gridThickness; g++) {
+                index = ((int)y + g) * state->width + x;
+                strokeIndex = state->gridOfIndecies[index];
                 if (strokeIndex != 0 && !(strokeIndex & 1 << 15)) continue;
-                Color bg;
                 if (strokeIndex == 0) 
                     bg = highligtherColor(state->theme, Black, false);
                 else {
                     strokeIndex &= ~(1 << 15);
                     strokeIndex--;
-                    struct Stroke *stroke = atIndex(&state->history.highlighterStrokes, strokeIndex);
-                    bg = highligtherColor(state->theme, stroke->color, true);
+                    s = atIndex(&state->history.highlighterStrokes, 
+                                strokeIndex);
+                    bg = highligtherColor(state->theme, s->color, true);
                 }
                 pixels[index] = bg;
             }
         }
     }
 
-    struct Stroke s;
-
-    for (float y = 0; y < state->height; y +=1) {
-        for (float x = 0; x < state->width - 1; x += gridSizeX) {
-            for (int g = 0; g < gridSize; g++) {
-                int index = (int)y * state->width + x + g;
-                int strokeIndex = state->gridOfIndecies[index];
+    for (y = 0; y < state->height; y +=1) {
+        for (x = 0; x < state->width - 1; x += gridSizeX) {
+            for (g = 0; g < gridThickness; g++) {
+                index = (int)y * state->width + x + g;
+                strokeIndex = state->gridOfIndecies[index];
                 if (strokeIndex != 0 && !(strokeIndex & 1 << 15)) continue;
-                Color bg;
                 if (strokeIndex == 0) 
                     bg = highligtherColor(state->theme, Black, false);
                 else {
                     strokeIndex &= ~(1 << 15);
                     strokeIndex--;
-                    s = *(struct Stroke *)atIndex(
-                            &state->history.highlighterStrokes,
-                            strokeIndex);
-                    bg = highligtherColor(state->theme, s.color, true);
+                    s = atIndex(&state->history.highlighterStrokes, 
+                                strokeIndex);
+                    bg = highligtherColor(state->theme, s->color, true);
                 }
                 pixels[index] = bg;
             }
         }
     }
             
-    updatePenStrokes(state, pixels);
+}
 
-    state->tool = t;
-    state->highlighterOptions.color = hc;
-    state->penOptions.color = pc;
+void 
+drawCanvas2(State *state, Color *pixels) 
+{
+    memset(state->gridOfIndecies, 
+           0, 
+           state->width * state->height * sizeof(uint16_t));
+
+    drawHighlighterStrokes(state, pixels);
+    drawGrid(state, pixels);
+    drawPenStrokes(state, pixels);
 }
 
 State
@@ -465,6 +480,8 @@ main()
     struct Stroke *currentStroke;
     Image img;
     Texture2D texture;
+    float scalex, scaley;
+    Vector2 mouse;
 
     drawingStroke = needsFullRedraw = false;
     currentStroke = NULL;
@@ -474,15 +491,12 @@ main()
     InitWindow(state.width, state.height, "game");
     SetTargetFPS(60);
 
-    //Vector2   previousMouse = GetMousePosition();
-
     img       = GenImageColor(CANVAS_WIDTH, CANVAS_HEIGHT, BLANK);
     texture   = LoadTextureFromImage(img);
     UnloadImage(img);
 
     while (!WindowShouldClose()) {
         BeginDrawing();
-        //printf("fps: %d\n", GetFPS());
         ClearBackground(state.theme[White]);
 
         state.needsRedraw = false;
@@ -492,6 +506,11 @@ main()
             needsFullRedraw = true;
             state.width = GetRenderWidth();
             state.height = GetRenderHeight();
+            int expectedHeight = (float)state.width * 4/5;
+            if (state.height < expectedHeight) {
+                state.width = (float)state.height * 5/4;
+            }
+            else state.height = (float) state.width * 4/5;
             printf("dimensions: %dx%d\n", state.width, state.height);
             int size = state.width * state.height;
             state.gridOfIndecies = realloc(state.gridOfIndecies, 
@@ -503,10 +522,10 @@ main()
             UnloadImage(img);
         }
 
-        float scalex = (float)state.width / CANVAS_WIDTH;
-        float scaley = (float)state.height / CANVAS_HEIGHT;
+        scalex = (float)state.width / CANVAS_WIDTH;
+        scaley = (float)state.height / CANVAS_HEIGHT;
 
-        Vector2 mouse = GetMousePosition();
+        mouse = GetMousePosition();
 
         mouse.x /= scalex;
         mouse.y /= scaley;
@@ -521,7 +540,6 @@ main()
             strokeList  = &state.history.highlighterStrokes;
         }
         if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && !drawingStroke) {
-            // begin new stroke
             drawingStroke            = true;
             enum ColorT strokeColor  = state.penOptions.color;
             if (state.tool == Highlighter) {
@@ -530,10 +548,10 @@ main()
             Position p = (Position) {mouse.x, mouse.y};
             push(&state.history.points, &p);
             struct Stroke s = (struct Stroke) {
-                .numPoints                = 1,
-                .startingPointIndex       = state.history.points.length - 1,
-                .hidden                   = false,
-                .color                    = strokeColor
+                .numPoints       = 1,
+                .pointIndex      = state.history.points.length - 1,
+                .hidden          = false,
+                .color           = strokeColor
             };
             push(strokeList, &s);
             currentStroke = atIndex(strokeList, strokeList->length - 1);
@@ -601,17 +619,16 @@ main()
         if (state.needsRedraw || needsFullRedraw) {
             ClearBackground(state.theme[White]);
             if (needsFullRedraw) {
-                printf("drew entire frame\n");
+                //printf("drew entire frame\n");
                 memset( state.colorGrid, 
                         0, 
                         state.width * state.height * sizeof(Color));
                 drawCanvas2(&state, state.colorGrid);
             }
             UpdateTexture(texture, state.colorGrid);
-            printf("updated frame\n");
+            //printf("updated frame\n");
             state.needsRedraw = false;
         }
-        // previousMouse = mouse;
         Rectangle rect = {0, 0, state.width, state.height};
         DrawTexturePro(texture, rect, rect, (Vector2){0, 0}, 0.0, WHITE);
         EndDrawing();
