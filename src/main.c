@@ -94,6 +94,23 @@ typedef struct {
     int                 leftPadding;
 } State;
 
+DynArr            newArr(int);
+struct History    newhistory();
+void              push(DynArr*, void*);
+void *            atIndex(DynArr*, int);
+Color             highligtherColor(Color*, enum ColorT, bool);
+void              gridToSvg(FILE*, State*);
+void              applyToolToPixel2(int, int, State*, uint16_t);
+void              plotLineLow2(int, int, int, int, State*, uint16_t);
+void              plotLineHigh2(int, int, int, int, State*, uint16_t);
+void              plotLine2(int, int, int, int, State*, uint16_t);
+void              drawPenStrokes(State*, Color*);
+void              drawHighlighterStrokes(State*, Color*);
+void              drawGrid(State*, Color*);
+void              drawCanvas2(State*, Color*);
+State             newState(int, int);
+int               main();
+
 DynArr 
 newArr(int elementSize) 
 {
