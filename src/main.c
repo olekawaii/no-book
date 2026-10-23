@@ -6,6 +6,7 @@
 #include <inttypes.h>
 #include <assert.h>
 #include <inttypes.h>
+#include <unistd.h>
 
 #include <raylib.h>
 
@@ -510,6 +511,57 @@ newState(int width, int height)
     };
     return state;
 }
+
+void 
+readFile(int fd, State *state) 
+{
+    int i;
+    uint16_t len, x, y, numPoints;
+    struct Stroke s;
+    enum ColorT col;
+    Position p;
+
+    read(fd, &len, 2);
+    for (int i = 0; i < len; i++) {
+        read(fd, &col, 1);
+        read(fd, &numPoints, 2);
+        uint16_t start = state->history.points.length;
+        for (int j = 0; j < numPoints; j++) {
+            read(fd, &p, sizeof(Position));
+            push(&state->history.points, &p);
+        }
+        s = (struct Stroke) {
+            .color = col,
+            .numPoints = numPoints,
+            .pointIndex = start
+        };
+        push(&state->history.highlighterStrokes, &s);
+    }
+    // same for pens
+}
+
+void 
+writeFile(int fd, State *s) 
+{
+    int i;
+    uint16_t len, x, y;
+    struct Stroke *stroke;
+
+    len = s->history.highlighterStrokes.length;
+    write(fd, &len, sizeof(uint16_t));
+    for (int i = 0; i < len; i++) {
+        stroke = atIndex(&s->history.highlighterStrokes, i);
+        write(fd, &stroke->color,     sizeof(uint8_t ));
+        write(fd, &stroke->numPoints, sizeof(uint16_t));
+        for (int j = 0; j < stroke->numPoints; j++) {
+            Position *point = atIndex(&s->history.points, 
+                                      stroke->pointIndex + j);
+            write(fd, point, sizeof(Position));
+        }
+    }
+    // same for pens
+}
+
 
 int 
 main() 
