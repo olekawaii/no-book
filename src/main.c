@@ -132,6 +132,22 @@ atIndex(DynArr *d, int index)
     return d->data + index * d->elementSize;
 }
 
+Color 
+highligtherColor(Color *theme, enum ColorT col, bool grid) 
+{
+    float opacity; 
+    Color w, bg;
+
+    opacity = HIGHLIGHTER_OPACITY;
+    if (grid) opacity -= 0.2;
+    w  = theme[White];
+    bg = theme[col];
+    bg.r = (bg.r * (1.0 - opacity) + w.r * opacity);
+    bg.g = (bg.g * (1.0 - opacity) + w.g * opacity);
+    bg.b = (bg.b * (1.0 - opacity) + w.b * opacity);
+    return bg;
+}
+
 void 
 gridToSvg(FILE* file, State *state) 
 {
@@ -165,6 +181,26 @@ gridToSvg(FILE* file, State *state)
             width,
             height);
 
+    for (i = 0; i < v.highlighterStrokes.length; i++) {
+        s = atIndex(&v.highlighterStrokes, i);
+        if (s->hidden) continue;
+        fprintf(file, "    <polyline \n");
+        fprintf(file, "        points=\"");
+        for (p = 0; p < s->numPoints; p++) {
+            Position *point = atIndex(&v.points, s->pointIndex + p);
+            fprintf(file, 
+                    "%d,%d ", 
+                    (int)(point->x * scale), 
+                    (int)(point->y * scale));
+        }
+        c = highligtherColor(state->theme, s->color, false);
+        fprintf(file,
+                "\" \n"
+                "        stroke=\"rgb(%d, %d, %d, 255)\" \n"
+                "        stroke-width=\"40\" \n"
+                "        fill=\"none\" />\n",
+                c.r, c.g, c.b);
+    }
     for (i = 0; i < v.penStrokes.length; i++) {
         s = atIndex(&v.penStrokes, i);
         if (s->hidden) continue;
@@ -188,22 +224,6 @@ gridToSvg(FILE* file, State *state)
     fprintf(file, "</svg>\n");
 }
 
-Color 
-highligtherColor(Color *theme, enum ColorT col, bool grid) 
-{
-    float opacity; 
-    Color w, bg;
-
-    opacity = HIGHLIGHTER_OPACITY;
-    if (grid) opacity -= 0.2;
-    w  = theme[White];
-    bg = theme[col];
-    bg.r = (bg.r * (1.0 - opacity) + w.r * opacity);
-    bg.g = (bg.g * (1.0 - opacity) + w.g * opacity);
-    bg.b = (bg.b * (1.0 - opacity) + w.b * opacity);
-    return bg;
-}
-
 void 
 applyToolToPixel2(int x, int y, State *state, uint16_t strokeIndex) {
     int index, i, dy, dx;
@@ -224,9 +244,10 @@ applyToolToPixel2(int x, int y, State *state, uint16_t strokeIndex) {
         stroke->hidden = true;
         break;
     case Pen:
+        int thickness = state->width / ((float)CANVAS_WIDTH / 3);
         col = state->theme[state->penOptions.color];
-        for (dy = -1; dy < 2; dy++) {
-            for (dx = -1; dx < 2; dx++) {
+        for (dy = 0; dy < thickness; dy++) {
+            for (dx = 0; dx < thickness; dx++) {
                 if ( x + dx >= state->width  
                         || x + dx < 0              
                         || y + dy >= state->height 
@@ -387,7 +408,7 @@ drawGrid(State *state, Color *pixels)
     struct Stroke *s;
     Color bg;
 
-    gridThickness = state->width / ((float)CANVAS_WIDTH / 2);
+    gridThickness = state->width / ((float)CANVAS_WIDTH / 3);
     gridSizeX = (float)state->width / 30;
     gridSizeY = (float)state->height / (6 * 4);
 
