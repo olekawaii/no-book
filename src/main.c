@@ -7,6 +7,7 @@
 #include <assert.h>
 #include <inttypes.h>
 #include <unistd.h>
+#include <fcntl.h>
 
 #include <raylib.h>
 
@@ -110,7 +111,7 @@ void              drawHighlighterStrokes(State*, Color*);
 void              drawGrid(State*, Color*);
 void              drawCanvas2(State*, Color*);
 State             newState(int, int);
-int               main();
+int               main(int, char**);
 
 DynArr 
 newArr(int elementSize) 
@@ -262,7 +263,7 @@ applyToolToPixel2(int x, int y, State *state, uint16_t strokeIndex) {
         stroke->hidden = true;
         break;
     case Pen:
-        int thickness = state->width / ((float)CANVAS_WIDTH / 3);
+        int thickness = 3 * (float)state->width / CANVAS_WIDTH;
         col = state->theme[state->penOptions.color];
         for (dy = 0; dy < thickness; dy++) {
             for (dx = 0; dx < thickness; dx++) {
@@ -515,35 +516,39 @@ newState(int width, int height)
 void 
 readFile(int fd, State *state) 
 {
-    int i;
+    int i, k;
     uint16_t len, x, y, numPoints;
     struct Stroke s;
     enum ColorT col;
     Position p;
 
-    read(fd, &len, 2);
-    for (int i = 0; i < len; i++) {
-        read(fd, &col, 1);
-        read(fd, &numPoints, 2);
-        uint16_t start = state->history.points.length;
-        for (int j = 0; j < numPoints; j++) {
-            read(fd, &p, sizeof(Position));
-            push(&state->history.points, &p);
+    DynArr *target = &state->history.highlighterStrokes;
+
+    for (int k = 0; k < 2; k++) {
+        read(fd, &len, 2);
+        for (int i = 0; i < len; i++) {
+            read(fd, &col, 1);
+            read(fd, &numPoints, 2);
+            uint16_t start = state->history.points.length;
+            for (int j = 0; j < numPoints; j++) {
+                read(fd, &p, sizeof(Position));
+                push(&state->history.points, &p);
+            }
+            s = (struct Stroke) {
+                .color = col,
+                .numPoints = numPoints,
+                .pointIndex = start
+            };
+            push(target, &s);
         }
-        s = (struct Stroke) {
-            .color = col,
-            .numPoints = numPoints,
-            .pointIndex = start
-        };
-        push(&state->history.highlighterStrokes, &s);
+        target = &state->history.penStrokes;
     }
-    // same for pens
 }
 
 void 
 writeFile(int fd, State *s) 
 {
-    int i;
+    int i, result;
     uint16_t len, x, y;
     struct Stroke *stroke;
 
@@ -551,12 +556,38 @@ writeFile(int fd, State *s)
     write(fd, &len, sizeof(uint16_t));
     for (int i = 0; i < len; i++) {
         stroke = atIndex(&s->history.highlighterStrokes, i);
-        write(fd, &stroke->color,     sizeof(uint8_t ));
-        write(fd, &stroke->numPoints, sizeof(uint16_t));
+        if (stroke->hidden) continue;
+
+        result = write(fd, &stroke->color,     sizeof(uint8_t ));
+        assert(result == sizeof(uint8_t));
+
+        result = write(fd, &stroke->numPoints, sizeof(uint16_t));
+        assert(result == sizeof(uint16_t));
+
         for (int j = 0; j < stroke->numPoints; j++) {
             Position *point = atIndex(&s->history.points, 
                                       stroke->pointIndex + j);
-            write(fd, point, sizeof(Position));
+            result = write(fd, point, sizeof(Position));
+            assert(result == sizeof(Position));
+        }
+    }
+
+    len = s->history.penStrokes.length;
+    write(fd, &len, sizeof(uint16_t));
+    for (int i = 0; i < len; i++) {
+        stroke = atIndex(&s->history.penStrokes, i);
+
+        result = write(fd, &stroke->color,     sizeof(uint8_t ));
+        assert(result == sizeof(uint8_t));
+
+        result = write(fd, &stroke->numPoints, sizeof(uint16_t));
+        assert(result == sizeof(uint16_t));
+
+        for (int j = 0; j < stroke->numPoints; j++) {
+            Position *point = atIndex(&s->history.points, 
+                                      stroke->pointIndex + j);
+            result = write(fd, point, sizeof(Position));
+            assert(result == sizeof(Position));
         }
     }
     // same for pens
@@ -564,7 +595,7 @@ writeFile(int fd, State *s)
 
 
 int 
-main() 
+main(int argc, char **argv) 
 {
     State state;
     bool drawingStroke, needsFullRedraw;
@@ -578,13 +609,21 @@ main()
     currentStroke = NULL;
     state = newState(CANVAS_WIDTH, CANVAS_HEIGHT);
 
-    SetConfigFlags(FLAG_WINDOW_RESIZABLE);
+    //SetConfigFlags(FLAG_WINDOW_RESIZABLE);
     InitWindow(state.width, state.height, "game");
     SetTargetFPS(60);
 
     img       = GenImageColor(CANVAS_WIDTH, CANVAS_HEIGHT, BLANK);
     texture   = LoadTextureFromImage(img);
     UnloadImage(img);
+
+    if (argc > 1) {
+        char* file = argv[1];
+        int   fd   = open(file, O_RDONLY);
+        assert(fd != -1);
+        readFile(fd, &state);
+        close(fd);
+    }
 
     while (!WindowShouldClose()) {
         BeginDrawing();
@@ -713,6 +752,12 @@ main()
             case KEY_L:        state.theme = rosePineDawn;          break;
             case KEY_K:        state.theme = everforestLight;       break;
             case KEY_N:        state.theme = flexokiLight;          break;
+            case KEY_S: 
+                int fd = open("uwu.nb", O_WRONLY | O_CREAT, 0666);
+                assert(fd != -1);
+                writeFile(fd, &state);
+                close(fd);
+                exit(0);
             }
         }
 
