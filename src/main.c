@@ -15,6 +15,12 @@
 #define CANVAS_HEIGHT         1024
 #define HIGHLIGHTER_OPACITY   0.9
 
+int previousNum = 0;
+int penStart = 0;
+int highlighterStart = 0;
+int menuStrokesStart = 0;
+bool inMenu = false;
+
 enum ColorT {
     White      = 0, /* background */
     Red        = 1,
@@ -89,11 +95,14 @@ typedef struct {
     enum Tool           tool;
     Color             * theme;
     bool                needsRedraw;
+    bool                needsFullRedraw;
     enum Markings       markings;
     struct History      history;
     uint16_t          * gridOfIndecies;
     Color             * colorGrid;
     int                 leftPadding;
+    bool                needsSaving;
+    enum ColorT         colorChange;
 } State;
 
 DynArr            newArr(int);
@@ -124,6 +133,31 @@ newArr(int elementSize)
     };
 }
 
+void
+drawRect(int x,     int y, 
+         int width, int height, 
+         Color *grid, 
+         Color c)
+{
+    for (int i = 0; i < height; i++) {
+        for (int j = 0; j < width; j++) {
+            *(grid + (y + i) * CANVAS_WIDTH + (j + x)) = c;
+        }
+    }
+}
+
+void 
+drawMainMenu(State *s)
+{
+    drawRect(0, 0, CANVAS_WIDTH / 2, CANVAS_HEIGHT, s->colorGrid, s->theme[White]);
+    for (int i = 1; i < 8; i++) {
+        drawRect( 100, 100 + (i-1) * 120, 
+                 80, 80, 
+                 s->colorGrid, 
+                 s->theme[i]);
+    }
+}
+
 struct History 
 newhistory() 
 {
@@ -139,6 +173,7 @@ push(DynArr *d, void *value)
 {
     if (d->length == d->capacity) {
         d->data = realloc(d->data, 2 * d->elementSize * d->capacity);
+        assert(d->data);
         d->capacity *= 2;
     }
     memcpy(d->data + d->elementSize * d->length, value, d->elementSize);
@@ -250,6 +285,34 @@ applyToolToPixel2(int x, int y, State *state, uint16_t strokeIndex) {
     struct Stroke *stroke;
 
     index = y * state->width + x;
+
+    int num = state->gridOfIndecies[index];
+    if (inMenu
+            && strokeIndex == state->history.penStrokes.length - 1
+            && strokeIndex >= menuStrokesStart 
+            && previousNum != strokeIndex
+            && num != 0 
+            && num - 1 < menuStrokesStart) 
+    {
+        previousNum = strokeIndex;
+        // XXX handle highlighter
+        state->needsFullRedraw = true;
+        num = num - 1 - penStart;
+        if ((num >= 16 && num <= 17) || num == 23) {
+            if (num == 23) state->needsSaving = true;
+            state->history.penStrokes.length = penStart;
+            penStart = 0;
+            inMenu = false;
+        }
+        else if (num == 10)  state->colorChange = Red;
+        else if (num == 11)  state->colorChange = Green;
+        else if (num == 12)  state->colorChange = Yellow;
+        else if (num == 13)  state->colorChange = Blue;
+        else if (num == 14)  state->colorChange = Magenta;
+        else if (num == 15)  state->colorChange = Cyan;
+        printf("num: %d\n", num);
+    }
+
     switch (state->tool) {
     case Eraser:
         i = state->gridOfIndecies[index];
@@ -293,7 +356,9 @@ applyToolToPixel2(int x, int y, State *state, uint16_t strokeIndex) {
 }
 
 void
-plotLineLow2(int x0, int y0, int x1, int y1, State *s, uint16_t index) 
+plotLineLow2(int x0, int y0, 
+             int x1, int y1, 
+             State *s, uint16_t index) 
 {
     int dx, dy, yi, D, y, x;
 
@@ -317,7 +382,9 @@ plotLineLow2(int x0, int y0, int x1, int y1, State *s, uint16_t index)
 }
 
 void 
-plotLineHigh2(int x0, int y0, int x1, int y1, State *s, uint16_t index) 
+plotLineHigh2(int x0, int y0, 
+              int x1, int y1, 
+              State *s, uint16_t index) 
 {
     int dx, dy, xi, D, x, y;
 
@@ -341,7 +408,9 @@ plotLineHigh2(int x0, int y0, int x1, int y1, State *s, uint16_t index)
 }
 
 void 
-plotLine2(int x0, int y0, int x1, int y1, State *s, uint16_t index) 
+plotLine2(int x0, int y0, 
+          int x1, int y1, 
+          State *s, uint16_t index) 
 {
     float scalex, scaley;
     
@@ -375,7 +444,7 @@ drawPenStrokes(State *state, Color *pixels)
 
     state->tool = Pen;
     numStrokes = state->history.penStrokes.length;           
-    for (i = 0; i < numStrokes; i++) {
+    for (i = penStart; i < numStrokes; i++) {
         s = *(struct Stroke *) atIndex(&state->history.penStrokes, i);
         if (s.hidden) continue;
         state->penOptions.color = s.color;
@@ -504,11 +573,13 @@ newState(int width, int height)
         .tool               = Pen,
         .theme              = rosePineDawn,
         .needsRedraw        = true,
+        .needsFullRedraw    = true,
         .markings           = Grid,
         .history            = newhistory(),
         .gridOfIndecies     = gridOfIndecies,
         .colorGrid          = colorGrid,
-        .leftPadding        = 0
+        .leftPadding        = 0,
+        .colorChange        = 0
     };
     return state;
 }
@@ -516,21 +587,23 @@ newState(int width, int height)
 void 
 readFile(int fd, State *state) 
 {
-    int i, k;
-    uint16_t len, x, y, numPoints;
+    int i, j, k;
+    uint16_t len, x, y, numPoints, start;
     struct Stroke s;
     enum ColorT col;
     Position p;
 
     DynArr *target = &state->history.highlighterStrokes;
 
-    for (int k = 0; k < 2; k++) {
+    for (k = 0; k < 2; k++) {
         read(fd, &len, 2);
-        for (int i = 0; i < len; i++) {
-            read(fd, &col, 1);
+        for (i = 0; i < len; i++) {
+            read(fd, &col, sizeof(enum ColorT));
+            printf("\ncol: %d %d\n\n", col, sizeof(enum ColorT));
+            assert(col <= 8 && col >= 0);
             read(fd, &numPoints, 2);
-            uint16_t start = state->history.points.length;
-            for (int j = 0; j < numPoints; j++) {
+            start = state->history.points.length;
+            for (j = 0; j < numPoints; j++) {
                 read(fd, &p, sizeof(Position));
                 push(&state->history.points, &p);
             }
@@ -548,49 +621,38 @@ readFile(int fd, State *state)
 void 
 writeFile(int fd, State *s) 
 {
-    int i, result;
-    uint16_t len, x, y;
+    int i, j, result, k;
+    uint16_t len, x, y, totallen;
     struct Stroke *stroke;
+    Position *point;
 
-    len = s->history.highlighterStrokes.length;
-    write(fd, &len, sizeof(uint16_t));
-    for (int i = 0; i < len; i++) {
-        stroke = atIndex(&s->history.highlighterStrokes, i);
-        if (stroke->hidden) continue;
-
-        result = write(fd, &stroke->color,     sizeof(uint8_t ));
-        assert(result == sizeof(uint8_t));
-
-        result = write(fd, &stroke->numPoints, sizeof(uint16_t));
-        assert(result == sizeof(uint16_t));
-
-        for (int j = 0; j < stroke->numPoints; j++) {
-            Position *point = atIndex(&s->history.points, 
-                                      stroke->pointIndex + j);
-            result = write(fd, point, sizeof(Position));
-            assert(result == sizeof(Position));
+    DynArr *target = &s->history.highlighterStrokes;
+    for (int k = 0; k < 2; k++) {
+        len = target->length;
+        totallen = len;
+        for (i = 0; i < len; i++) {
+            stroke = atIndex(target, i);
+            if (stroke->hidden) totallen--;
         }
-    }
+        write(fd, &totallen, sizeof(uint16_t));
+        for (i = 0; i < len; i++) {
+            stroke = atIndex(target, i);
+            if (stroke->hidden) continue; 
 
-    len = s->history.penStrokes.length;
-    write(fd, &len, sizeof(uint16_t));
-    for (int i = 0; i < len; i++) {
-        stroke = atIndex(&s->history.penStrokes, i);
+            result = write(fd, &stroke->color, sizeof(enum ColorT));
+            assert(result == sizeof(enum ColorT));
 
-        result = write(fd, &stroke->color,     sizeof(uint8_t ));
-        assert(result == sizeof(uint8_t));
+            result = write(fd, &stroke->numPoints, sizeof(uint16_t));
+            assert(result == sizeof(uint16_t));
 
-        result = write(fd, &stroke->numPoints, sizeof(uint16_t));
-        assert(result == sizeof(uint16_t));
-
-        for (int j = 0; j < stroke->numPoints; j++) {
-            Position *point = atIndex(&s->history.points, 
-                                      stroke->pointIndex + j);
-            result = write(fd, point, sizeof(Position));
-            assert(result == sizeof(Position));
+            for (j = 0; j < stroke->numPoints; j++) {
+                point = atIndex(&s->history.points, stroke->pointIndex + j);
+                result = write(fd, point, sizeof(Position));
+                assert(result == sizeof(Position));
+            }
         }
+        target = &s->history.penStrokes;
     }
-    // same for pens
 }
 
 
@@ -598,20 +660,20 @@ int
 main(int argc, char **argv) 
 {
     State state;
-    bool drawingStroke, needsFullRedraw;
+    bool drawingStroke;
     struct Stroke *currentStroke;
     Image img;
     Texture2D texture;
     float scalex, scaley;
     Vector2 mouse;
 
-    drawingStroke = needsFullRedraw = false;
+    drawingStroke = state.needsFullRedraw = false;
     currentStroke = NULL;
     state = newState(CANVAS_WIDTH, CANVAS_HEIGHT);
 
     //SetConfigFlags(FLAG_WINDOW_RESIZABLE);
     InitWindow(state.width, state.height, "game");
-    SetTargetFPS(60);
+    SetTargetFPS(120);
 
     img       = GenImageColor(CANVAS_WIDTH, CANVAS_HEIGHT, BLANK);
     texture   = LoadTextureFromImage(img);
@@ -623,17 +685,17 @@ main(int argc, char **argv)
         assert(fd != -1);
         readFile(fd, &state);
         close(fd);
+        printf("successfully loaded!\n");
+        state.needsFullRedraw = true;
     }
 
     while (!WindowShouldClose()) {
         BeginDrawing();
-        ClearBackground(state.theme[Cyan]);
+        ClearBackground(state.theme[White]);
 
         state.needsRedraw = false;
-        needsFullRedraw = false;
-
         if (IsWindowResized()) {
-            needsFullRedraw = true;
+            state.needsFullRedraw = true;
             state.width = GetRenderWidth();
             state.height = GetRenderHeight();
             int expectedHeight = (float)state.width * 4/5;
@@ -690,6 +752,8 @@ main(int argc, char **argv)
             currentStroke = atIndex(strokeList, strokeList->length - 1);
         }
 
+        //drawMainMenu(&state);
+
         if (IsMouseButtonDown(MOUSE_BUTTON_LEFT) && drawingStroke) {
             Position previous = 
                 *(Position *) atIndex(&state.history.points, 
@@ -703,14 +767,14 @@ main(int argc, char **argv)
                 Position p = (Position) { x1, y1 };
                 if (state.tool == Eraser) {
                     plotLine2(x0, y0, x1, y1, &state, strokeList->length - 1);
-                    needsFullRedraw = true;
+                    state.needsFullRedraw = true;
                 } 
                 else {
                     push(&state.history.points, &p);
                     currentStroke->numPoints++;
                     if (state.tool == Pen) {
                         plotLine2(x0, y0, x1, y1, &state, strokeList->length - 1);
-                    } else needsFullRedraw = true;
+                    } else state.needsFullRedraw = true;
                 }
                 state.needsRedraw = true;
             }
@@ -725,21 +789,19 @@ main(int argc, char **argv)
             currentStroke = NULL;
         }
 
-        enum ColorT *colorptr = &state.penOptions.color;
-        if (state.tool == Highlighter) colorptr = &state.highlighterOptions.color;
 
         int key = GetKeyPressed();
         if (key != 0) {
-            needsFullRedraw = true;
+            state.needsFullRedraw = true;
             switch (key) {
-            case KEY_ZERO:     *colorptr = White;                   break;
-            case KEY_ONE:      *colorptr = Red;                     break;
-            case KEY_TWO:      *colorptr = Green;                   break;
-            case KEY_THREE:    *colorptr = Yellow;                  break;
-            case KEY_FOUR:     *colorptr = Blue;                    break;
-            case KEY_FIVE:     *colorptr = Magenta;                 break;
-            case KEY_SIX:      *colorptr = Cyan;                    break;
-            case KEY_SEVEN:    *colorptr = Black;                   break;
+            case KEY_ZERO:     state.colorChange = White;           break;
+            case KEY_ONE:      state.colorChange = Red;             break;
+            case KEY_TWO:      state.colorChange = Green;           break;
+            case KEY_THREE:    state.colorChange = Yellow;          break;
+            case KEY_FOUR:     state.colorChange = Blue;            break;
+            case KEY_FIVE:     state.colorChange = Magenta;         break;
+            case KEY_SIX:      state.colorChange = Cyan;            break;
+            case KEY_SEVEN:    state.colorChange = Black;           break;
 
             case KEY_H:        state.tool = Highlighter;            break;
             case KEY_P:        state.tool = Pen;                    break;
@@ -752,17 +814,41 @@ main(int argc, char **argv)
             case KEY_L:        state.theme = rosePineDawn;          break;
             case KEY_K:        state.theme = everforestLight;       break;
             case KEY_N:        state.theme = flexokiLight;          break;
-            case KEY_S: 
-                int fd = open("uwu.nb", O_WRONLY | O_CREAT, 0666);
+            case KEY_S:        state.needsSaving = true;            break;
+            case KEY_Z:
+                if (inMenu) break;
+                inMenu = true;
+                penStart = state.history.penStrokes.length;
+                int fd = open("overlay.nb", O_RDONLY);
                 assert(fd != -1);
-                writeFile(fd, &state);
+                readFile(fd, &state);
                 close(fd);
-                exit(0);
+                menuStrokesStart = state.history.penStrokes.length;
+                break;
             }
         }
 
-        if (state.needsRedraw || needsFullRedraw) {
-            if (needsFullRedraw) {
+        if (state.colorChange != 0) {
+            enum ColorT *colorptr = &state.penOptions.color;
+            if (state.tool == Highlighter) colorptr = &state.highlighterOptions.color;
+            *colorptr = state.colorChange;
+            if (drawingStroke)     currentStroke->color = state.colorChange;
+            state.colorChange = 0;
+        }
+
+        if (state.needsSaving) {
+            int fd = open("uwu.nb", O_WRONLY | O_CREAT, 0666);
+            assert(fd != -1);
+            writeFile(fd, &state);
+            close(fd);
+            exit(0);
+            break;
+        }
+
+        if (state.needsRedraw || state.needsFullRedraw) {
+            state.needsRedraw = false;
+            if (state.needsFullRedraw) {
+                state.needsFullRedraw = false;
                 //printf("drew entire frame\n");
                 Color c = state.theme[White];
                 for (int i = 0; i < state.width * state.height; i++)
@@ -770,7 +856,7 @@ main(int argc, char **argv)
                 drawCanvas2(&state, state.colorGrid);
             }
             UpdateTexture(texture, state.colorGrid);
-            //printf("updated frame\n");
+            printf("updated frame\n");
             state.needsRedraw = false;
         }
         Rectangle rect = {0, 0, state.width, state.height};
