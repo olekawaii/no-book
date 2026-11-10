@@ -449,7 +449,7 @@ drawPenStrokes(State *state, Color *pixels)
     numStrokes = state->history.penStrokes.length;           
     for (i = penStart; i < numStrokes; i++) {
         s = *(struct Stroke *) atIndex(&state->history.penStrokes, i);
-        if (s.hidden) continue;
+        if (s.hidden || s.numPoints < 2) continue;
         state->penOptions.color = s.color;
         for (j = s.pointIndex; j < s.pointIndex + s.numPoints - 1; j++) {
             p0 = *(Position *)atIndex(&state->history.points, j);
@@ -477,7 +477,7 @@ void drawHighlighterStrokes(State *state, Color *pixels)
     numStrokes = state->history.highlighterStrokes.length;           
     for (i = 0; i < numStrokes; i++) {
         s = *(struct Stroke *) atIndex(&state->history.highlighterStrokes, i);
-        if (s.hidden) continue;
+        if (s.hidden || s.numPoints < 2) continue;
         if (s.numPoints == 0) continue;
         state->highlighterOptions.color = s.color;
         for (j = s.pointIndex; j < s.pointIndex + s.numPoints - 1; j++) {
@@ -764,11 +764,16 @@ main(int argc, char **argv)
             };
             push(strokeList, &s);
             currentStroke = atIndex(strokeList, strokeList->length - 1);
+            state.needsFullRedraw = true;
         }
 
         //drawMainMenu(&state);
 
         if (IsMouseButtonDown(MOUSE_BUTTON_LEFT) && drawingStroke) {
+            if (state.history.points.length == 0) {
+                state.needsFullRedraw = true;
+                goto skip;
+            }
             Position previous = 
                 *(Position *) atIndex(&state.history.points, 
                                       state.history.points.length - 1);
@@ -798,10 +803,12 @@ main(int argc, char **argv)
             if (numPoints == 1) {
                 strokeList->length--;
                 state.history.points.length--;
+                state.needsFullRedraw = true;
             }
             drawingStroke = false;
             currentStroke = NULL;
         }
+    skip:
 
 
         int key = GetKeyPressed();
@@ -864,6 +871,7 @@ main(int argc, char **argv)
             }
             needsToEnterMenu = false;
             state.needsFullRedraw = true;
+            drawingStroke = false;
         }
 
         if (state.needsToExitMenu) {
@@ -876,16 +884,16 @@ main(int argc, char **argv)
             }
             state.needsToExitMenu = false;
             state.needsFullRedraw = true;
+            drawingStroke = false;
         }
         printf("2 %d, %d\n",other.penStrokes.length,state.history.penStrokes.length);
         assert(other.penStrokes.length != state.history.penStrokes.length);
-
 
         if (state.needsRedraw || state.needsFullRedraw) {
             state.needsRedraw = false;
             if (state.needsFullRedraw) {
                 state.needsFullRedraw = false;
-                //printf("drew entire frame\n");
+                printf("drew entire frame\n");
                 Color c = state.theme[White];
                 for (int i = 0; i < state.width * state.height; i++)
                     state.colorGrid[i] = c;
@@ -895,6 +903,7 @@ main(int argc, char **argv)
             printf("updated frame\n");
             state.needsRedraw = false;
         }
+
         Rectangle rect = {0, 0, state.width, state.height};
         DrawTexturePro(texture, 
                        rect, rect, 
