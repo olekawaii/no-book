@@ -34,6 +34,27 @@ enum ColorT {
     Black      = 7,
 };
 
+/*
+ * To create a menu file, draw the strokes in 
+ * the following order. Anything drawn after 
+ * these has no special behavior and is just 
+ * for decoration.
+ */
+
+enum Action {
+    Action_UseBlack         = 0,
+    Action_UseRed           = 1,
+    Action_UseGreen         = 2,
+    Action_UseYellow        = 3,
+    Action_UseBlue          = 4,
+    Action_UseMagenta       = 5,
+    Action_UseCyan          = 6,
+
+    Action_ExitMenu         = 7,
+    Action_Save             = 8,
+    Action_ChangeTheme      = 9,
+};
+
 int min(int x, int y) {
     if (x < y) return x;
     return y;
@@ -45,6 +66,15 @@ int max(int x, int y) {
 }
 
 #include "themes.c"
+
+Color *themes[] = {
+    rosePineDawn,
+    everforestLight,
+    kanagawaLotus
+};
+
+int themeIndex = 0;
+int themeCount = 3;
 
 enum Markings {
     Lines,
@@ -106,6 +136,7 @@ typedef struct State {
     bool                needsSaving;
     enum ColorT         colorChange;
     bool                needsToExitMenu;
+    bool                needsThemeChange;
 } State;
 
 DynArr            newArr(int);
@@ -302,17 +333,21 @@ applyToolToPixel2(int x, int y, State *state, uint16_t strokeIndex) {
         // XXX handle highlighter
         state->needsFullRedraw = true;
         num = num - 1 - penStart;
-        if ((num >= 16 && num <= 17) || num == 23) {
-            if (num == 23) state->needsSaving = true;
-            penStart = 0;
-            state->needsToExitMenu = true;
-        }
-        else if (num == 10)  state->colorChange = Red;
-        else if (num == 11)  state->colorChange = Green;
-        else if (num == 12)  state->colorChange = Yellow;
-        else if (num == 13)  state->colorChange = Blue;
-        else if (num == 14)  state->colorChange = Magenta;
-        else if (num == 15)  state->colorChange = Cyan;
+        // if ((num >= 16 && num <= 17) || num == 23) {
+        //     if (num == 23) state->needsSaving = true;
+        //     penStart = 0;
+        //     state->needsToExitMenu = true;
+        // }
+        if      (num == Action_Save        )  state->needsSaving = true;
+        else if (num == Action_ChangeTheme )  state->needsThemeChange = true;
+        else if (num == Action_UseBlack    )  state->colorChange = Black;
+        else if (num == Action_UseRed      )  state->colorChange = Red;
+        else if (num == Action_UseGreen    )  state->colorChange = Green;
+        else if (num == Action_UseYellow   )  state->colorChange = Yellow;
+        else if (num == Action_UseBlue     )  state->colorChange = Blue;
+        else if (num == Action_UseMagenta  )  state->colorChange = Magenta;
+        else if (num == Action_UseCyan     )  state->colorChange = Cyan;
+        else if (num == Action_ExitMenu    )  state->needsToExitMenu = true;
         printf("num: %d\n", num);
     }
 
@@ -582,7 +617,8 @@ newState(int width, int height)
         .colorGrid          = colorGrid,
         .leftPadding        = 0,
         .colorChange        = 0,
-        .needsToExitMenu    = 0 
+        .needsToExitMenu    = 0, 
+        .needsThemeChange   = 0,
     };
     return state;
 }
@@ -845,16 +881,15 @@ main(int argc, char **argv)
             if (state.tool == Highlighter) colorptr = &state.highlighterOptions.color;
             *colorptr = state.colorChange;
             if (drawingStroke)     currentStroke->color = state.colorChange;
-            state.colorChange = 0;
         }
 
         if (state.needsSaving) {
+            state.needsSaving = false;
             int fd = open("uwu.nb", O_WRONLY | O_CREAT, 0666);
             assert(fd != -1);
             writeFile(fd, &state);
             close(fd);
-            exit(0);
-            break;
+            printf("saved\n");
         }
 
         printf("%d, %d\n",other.penStrokes.length,state.history.penStrokes.length);
@@ -872,6 +907,12 @@ main(int argc, char **argv)
             needsToEnterMenu = false;
             state.needsFullRedraw = true;
             drawingStroke = false;
+        }
+
+        if (state.needsThemeChange) {
+            state.needsThemeChange = false;
+            themeIndex = (themeIndex + 1) % themeCount;
+            state.theme = themes[themeIndex];
         }
 
         if (state.needsToExitMenu) {
