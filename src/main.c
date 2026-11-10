@@ -167,31 +167,6 @@ newArr(int elementSize)
     };
 }
 
-void
-drawRect(int x,     int y, 
-         int width, int height, 
-         Color *grid, 
-         Color c)
-{
-    for (int i = 0; i < height; i++) {
-        for (int j = 0; j < width; j++) {
-            *(grid + (y + i) * CANVAS_WIDTH + (j + x)) = c;
-        }
-    }
-}
-
-void 
-drawMainMenu(State *s)
-{
-    drawRect(0, 0, CANVAS_WIDTH / 2, CANVAS_HEIGHT, s->colorGrid, s->theme[White]);
-    for (int i = 1; i < 8; i++) {
-        drawRect( 100, 100 + (i-1) * 120, 
-                 80, 80, 
-                 s->colorGrid, 
-                 s->theme[i]);
-    }
-}
-
 struct History 
 newhistory() 
 {
@@ -694,6 +669,17 @@ writeFile(int fd, State *s)
     }
 }
 
+char* getNobookDirectory() {
+    char *home, *path;
+
+    path = calloc(100, 1);
+    home = getenv("HOME");
+    assert(home != NULL);
+    sprintf(path, "%s/.local/share/no-book/", home);
+    //free(home);
+    printf("%s\n", home);
+    return(path);
+}
 
 int 
 main(int argc, char **argv) 
@@ -705,11 +691,16 @@ main(int argc, char **argv)
     Texture2D           texture;
     float               scalex, scaley;
     Vector2             mouse;
+    char *path, *dirend;
+
+    path = getNobookDirectory();
+    dirend = path + strlen(path);
 
     {
         //  save stroke history from overlay.nb to (other) 
         //  to use for the menu
-        int fd = open("overlay.nb", O_RDONLY);
+        strcpy(dirend, "overlay.nb");
+        int fd = open(path, O_RDONLY);
         assert(fd != -1);
         State temp = newState(0, 0);
         readFile(fd, &temp);
@@ -803,8 +794,6 @@ main(int argc, char **argv)
             state.needsFullRedraw = true;
         }
 
-        //drawMainMenu(&state);
-
         if (IsMouseButtonDown(MOUSE_BUTTON_LEFT) && drawingStroke) {
             if (state.history.points.length == 0) {
                 state.needsFullRedraw = true;
@@ -885,15 +874,13 @@ main(int argc, char **argv)
 
         if (state.needsSaving) {
             state.needsSaving = false;
-            int fd = open("uwu.nb", O_WRONLY | O_CREAT, 0666);
+            int fd = open("out.nb", O_WRONLY | O_CREAT, 0666);
             assert(fd != -1);
             writeFile(fd, &state);
             close(fd);
             printf("saved\n");
         }
 
-        printf("%d, %d\n",other.penStrokes.length,state.history.penStrokes.length);
-        assert(other.penStrokes.length != state.history.penStrokes.length);
         struct History temp;
 
         if (needsToEnterMenu) {
@@ -902,7 +889,6 @@ main(int argc, char **argv)
                 state.history = other;
                 other = temp;
                 inMenu = true;
-                printf("i ran, inMenu: %d\n", inMenu);
             }
             needsToEnterMenu = false;
             state.needsFullRedraw = true;
@@ -927,8 +913,6 @@ main(int argc, char **argv)
             state.needsFullRedraw = true;
             drawingStroke = false;
         }
-        printf("2 %d, %d\n",other.penStrokes.length,state.history.penStrokes.length);
-        assert(other.penStrokes.length != state.history.penStrokes.length);
 
         if (state.needsRedraw || state.needsFullRedraw) {
             state.needsRedraw = false;
@@ -952,7 +936,7 @@ main(int argc, char **argv)
                        0.0, WHITE);
         EndDrawing();
     }
-    FILE* f = fopen("uwu.svg", "w");
+    FILE* f = fopen("out.svg", "w");
     gridToSvg(f, &state);
     CloseWindow();
     free(state.colorGrid);

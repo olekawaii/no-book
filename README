@@ -1,1 +1,41 @@
-todo
+BUILDING
+
+depends on raylib
+
+    cd src
+    cc -lm -lraylib -g main.c
+    mkdir -p ~/.local/share/no-book
+    mv src/overlay.nb ~/.local/share/no-book/overlay.nb
+
+
+
+
+MENU FILE
+
+A menu file is a save file that describes the appearence 
+of the main menu. There is one provided at src/overlay.nb
+however you can make your own with a simple save file:
+
+    /*
+     * To create a menu file, draw the strokes in
+     * the following order. Anything drawn after
+     * these has no special behavior and is just
+     * for decoration.
+     */
+    
+    enum Action {
+        Action_UseBlack         = 0,
+        Action_UseRed           = 1,
+        Action_UseGreen         = 2,
+        Action_UseYellow        = 3,
+        Action_UseBlue          = 4,
+        Action_UseMagenta       = 5,
+        Action_UseCyan          = 6,
+    
+        Action_ExitMenu         = 7,
+        Action_Save             = 8,
+        Action_ChangeTheme      = 9,
+    };
+
+
+
