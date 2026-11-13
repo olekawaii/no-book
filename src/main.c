@@ -53,17 +53,9 @@ enum Action {
     Action_ExitMenu         = 7,
     Action_Save             = 8,
     Action_ChangeTheme      = 9,
+
+    Action_Eraser           = 10,
 };
-
-int min(int x, int y) {
-    if (x < y) return x;
-    return y;
-}
-
-int max(int x, int y) {
-    if (x > y) return x;
-    return y;
-}
 
 #include "themes.c"
 
@@ -137,6 +129,7 @@ typedef struct State {
     enum ColorT         colorChange;
     bool                needsToExitMenu;
     bool                needsThemeChange;
+    bool                useEraser;
 } State;
 
 DynArr            newArr(int);
@@ -145,7 +138,7 @@ void              push(DynArr*, void*);
 void *            atIndex(DynArr*, int);
 Color             highligtherColor(Color*, enum ColorT, bool);
 void              gridToSvg(FILE*, State*);
-void              applyToolToPixel2(int, int, State*, uint16_t);
+void              applyToolToPixel(int, int, State*, uint16_t);
 void              plotLineLow2(int, int, int, int, State*, uint16_t);
 void              plotLineHigh2(int, int, int, int, State*, uint16_t);
 void              plotLine2(int, int, int, int, State*, uint16_t);
@@ -288,7 +281,7 @@ gridToSvg(FILE* file, State *state)
 }
 
 void 
-applyToolToPixel2(int x, int y, State *state, uint16_t strokeIndex) {
+applyToolToPixel(int x, int y, State *state, uint16_t strokeIndex) {
     int index, i, dy, dx;
     Color col;
     struct Stroke *stroke;
@@ -308,21 +301,19 @@ applyToolToPixel2(int x, int y, State *state, uint16_t strokeIndex) {
         // XXX handle highlighter
         state->needsFullRedraw = true;
         num = num - 1 - penStart;
-        // if ((num >= 16 && num <= 17) || num == 23) {
-        //     if (num == 23) state->needsSaving = true;
-        //     penStart = 0;
-        //     state->needsToExitMenu = true;
-        // }
-        if      (num == Action_Save        )  state->needsSaving = true;
-        else if (num == Action_ChangeTheme )  state->needsThemeChange = true;
-        else if (num == Action_UseBlack    )  state->colorChange = Black;
-        else if (num == Action_UseRed      )  state->colorChange = Red;
-        else if (num == Action_UseGreen    )  state->colorChange = Green;
-        else if (num == Action_UseYellow   )  state->colorChange = Yellow;
-        else if (num == Action_UseBlue     )  state->colorChange = Blue;
-        else if (num == Action_UseMagenta  )  state->colorChange = Magenta;
-        else if (num == Action_UseCyan     )  state->colorChange = Cyan;
-        else if (num == Action_ExitMenu    )  state->needsToExitMenu = true;
+        switch (num) {
+        case Action_Save        :  state->needsSaving = true;        break;
+        case Action_ChangeTheme :  state->needsThemeChange = true;   break;
+        case Action_UseBlack    :  state->colorChange = Black;       break;
+        case Action_UseRed      :  state->colorChange = Red;         break;
+        case Action_UseGreen    :  state->colorChange = Green;       break;
+        case Action_UseYellow   :  state->colorChange = Yellow;      break;
+        case Action_UseBlue     :  state->colorChange = Blue;        break;
+        case Action_UseMagenta  :  state->colorChange = Magenta;     break;
+        case Action_UseCyan     :  state->colorChange = Cyan;        break;
+        case Action_ExitMenu    :  state->needsToExitMenu = true;    break;
+        case Action_Eraser      :  state->useEraser = true;          break;
+        }
         printf("num: %d\n", num);
     }
 
@@ -385,7 +376,7 @@ plotLineLow2(int x0, int y0,
     D = (2 * dy) - dx;
     y = y0;
     for (x = x0; x <= x1; x++) {
-        applyToolToPixel2(x, y, s, index);
+        applyToolToPixel(x, y, s, index);
         if (D > 0) {
             y += yi;
             D += 2 * (dy - dx);
@@ -411,7 +402,7 @@ plotLineHigh2(int x0, int y0,
     D = (2 * dx) - dy;
     x = x0;
     for (y = y0; y <= y1; y++) {
-        applyToolToPixel2(x, y, s, index);
+        applyToolToPixel(x, y, s, index);
         if (D > 0) {
             x += xi;
             D += 2 * (dx - dy);
@@ -594,6 +585,7 @@ newState(int width, int height)
         .colorChange        = 0,
         .needsToExitMenu    = 0, 
         .needsThemeChange   = 0,
+        .useEraser          = 0,
     };
     return state;
 }
@@ -686,12 +678,13 @@ main(int argc, char **argv)
 {
     State               state;
     bool                drawingStroke;
-    struct Stroke     * currentStroke;
+    struct Stroke       *currentStroke;
     Image               img;
     Texture2D           texture;
     float               scalex, scaley;
     Vector2             mouse;
-    char *path, *dirend;
+    char                *path, *dirend;
+    enum Tool           previousTool;
 
     path = getNobookDirectory();
     dirend = path + strlen(path);
@@ -824,12 +817,14 @@ main(int argc, char **argv)
             }
         } 
         else if (drawingStroke) {
+            /* stop drawing stroke */
             int numPoints = currentStroke->numPoints;
             if (numPoints == 1) {
                 strokeList->length--;
                 state.history.points.length--;
                 state.needsFullRedraw = true;
             }
+            if (state.tool == Eraser) state.tool = previousTool;
             drawingStroke = false;
             currentStroke = NULL;
         }
@@ -851,7 +846,7 @@ main(int argc, char **argv)
 
             case KEY_H:        state.tool = Highlighter;            break;
             case KEY_P:        state.tool = Pen;                    break;
-            case KEY_E:        state.tool = Eraser;                 break;
+            case KEY_E:        state.useEraser = true;              break;
                             
             case KEY_T:        state.markings = None;               break;
                             
@@ -879,6 +874,14 @@ main(int argc, char **argv)
             writeFile(fd, &state);
             close(fd);
             printf("saved\n");
+        }
+
+        if (state.useEraser) {
+            state.useEraser = false;
+            previousTool = state.tool;
+            state.tool = Eraser;
+            //drawingStroke = false;
+            state.needsToExitMenu = true;
         }
 
         struct History temp;
