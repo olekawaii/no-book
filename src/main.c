@@ -209,12 +209,12 @@ gridToSvg(FILE* file, State *state)
 {
     Color c;
     struct Stroke *s;
-    int i, p;
+    int i, p, width, height;
 
     float scale = 0.75;
     struct History v = state->history;
-    int width = CANVAS_WIDTH  * scale;
-    int height = CANVAS_HEIGHT * scale;
+    width = CANVAS_WIDTH  * scale;
+    height = CANVAS_HEIGHT * scale;
     fprintf(file,
             "<svg \n"
             "    width=\"%d\" \n"
@@ -282,9 +282,9 @@ gridToSvg(FILE* file, State *state)
 
 void 
 applyToolToPixel(int x, int y, State *state, uint16_t strokeIndex) {
-    int index, i, dy, dx;
-    Color col;
-    struct Stroke *stroke;
+    int               index, i, dy, dx, thickness;
+    Color             col;
+    struct Stroke     *stroke;
 
     index = y * state->width + x;
 
@@ -297,7 +297,7 @@ applyToolToPixel(int x, int y, State *state, uint16_t strokeIndex) {
             && num - 1     <  menuStrokesStart)
     {
         printf("TTOAHUNAUN\n");
-        previousNum = strokeIndex;
+        if (num != strokeIndex) previousNum = strokeIndex;
         // XXX handle highlighter
         state->needsFullRedraw = true;
         num = num - 1 - penStart;
@@ -330,7 +330,7 @@ applyToolToPixel(int x, int y, State *state, uint16_t strokeIndex) {
         stroke->hidden = true;
         break;
     case Pen:
-        int thickness = 3 * (float)state->width / CANVAS_WIDTH;
+        thickness = 3 * (float)state->width / CANVAS_WIDTH;
         col = state->theme[state->penOptions.color];
         for (dy = 0; dy < thickness; dy++) {
             for (dx = 0; dx < thickness; dx++) {
