@@ -139,7 +139,8 @@ struct History    newhistory();
 void              push(DynArr*, void*);
 void *            atIndex(DynArr*, int);
 Color             highligtherColor(Color*, enum ColorT, bool);
-void              gridToSvg(FILE*, State*);
+void              exportSVG(FILE*, State*);
+void              exportPPM(FILE*, State*);
 void              applyToolToPixel(int, int, State*, uint16_t);
 void              plotLineLow2(int, int, int, int, State*, uint16_t);
 void              plotLineHigh2(int, int, int, int, State*, uint16_t);
@@ -149,6 +150,7 @@ void              drawHighlighterStrokes(State*, Color*);
 void              drawGrid(State*, Color*);
 void              drawCanvas2(State*, Color*);
 State             newState(int, int);
+void              exitWithHelp();
 int               main(int, char**);
 
 DynArr 
@@ -207,7 +209,7 @@ highligtherColor(Color *theme, enum ColorT col, bool grid)
 }
 
 void 
-gridToSvg(FILE* file, State *state) 
+exportSVG(FILE* file, State *state) 
 {
     Color c;
     struct Stroke *s;
@@ -280,6 +282,28 @@ gridToSvg(FILE* file, State *state)
                 c.r, c.g, c.b);
     }
     fprintf(file, "</svg>\n");
+}
+
+void 
+exportPPM(FILE* file, State *state) 
+{
+    int i;
+    Color c;
+
+    // the colorgrid must be drawn by now
+    drawCanvas2(state, state->colorGrid);
+
+    fprintf(file, "P3\n");
+    fprintf(file, "%d %d\n", state->width, state->height);
+    fprintf(file, "255\n");
+    for (i = 0; i < state->width * state->height; i++) {
+        c = state->colorGrid[i];
+        if (c.r + c.b + c.g == 0) {
+            c = state->theme[White];
+        }
+        fprintf(stdout, "%d %d %d\n", c.r, c.g, c.b);
+    }
+
 }
 
 void 
@@ -599,7 +623,7 @@ newState(int width, int height)
 void 
 readFile(int fd, State *state) 
 {
-    int i, j, k;
+    int i, j, k, result;
     uint16_t len, x, y, numPoints, start;
     struct Stroke s;
     enum ColorT col;
@@ -608,15 +632,15 @@ readFile(int fd, State *state)
     DynArr *target = &state->history.highlighterStrokes;
 
     for (k = 0; k < 2; k++) {
-        read(fd, &len, 2);
+        result = read(fd, &len, 2);
         for (i = 0; i < len; i++) {
-            read(fd, &col, sizeof(enum ColorT));
+            result = read(fd, &col, sizeof(enum ColorT));
             //printf("\ncol: %d %d\n\n", col, sizeof(enum ColorT));
             assert(col <= 8 && col >= 0);
-            read(fd, &numPoints, 2);
+            result = read(fd, &numPoints, 2);
             start = state->history.points.length;
             for (j = 0; j < numPoints; j++) {
-                read(fd, &p, sizeof(Position));
+                result = read(fd, &p, sizeof(Position));
                 push(&state->history.points, &p);
             }
             s = (struct Stroke) {
@@ -646,7 +670,7 @@ writeFile(int fd, State *s)
             stroke = atIndex(target, i);
             if (stroke->hidden) totallen--;
         }
-        write(fd, &totallen, sizeof(uint16_t));
+        result = write(fd, &totallen, sizeof(uint16_t));
         for (i = 0; i < len; i++) {
             stroke = atIndex(target, i);
             if (stroke->hidden) continue; 
@@ -678,6 +702,16 @@ char* getNobookDirectory() {
     return(path);
 }
 
+void
+exitWithHelp() {
+    fprintf(stderr, "Usage: no-book [OPTION]... [SAVEFILE]\n"
+           "Options: \n\n"
+           "    --help                   see this help message\n"
+           "    --export FORMAT          where FORMAT is 'svg' or 'ppm'\n"
+           "    --menu-file FILE         use savefile FILE as menu\n");
+    exit(1);
+}
+
 int 
 main(int argc, char **argv) 
 {
@@ -695,34 +729,31 @@ main(int argc, char **argv)
     char *exportAs = NULL;
     char *menuFile = NULL;
 
+    char *gotSaveFile = NULL;
 
     path = getNobookDirectory();
     dirend = path + strlen(path);
 
     for (int i = 1; i < argc; i++) {
         char *arg = argv[i];
-        if (strcmp(arg, "--help") == 0) {
-            printf("Usage: no-book [OPTION]... [SAVEFILE]\n"
-                   "Options: \n\n"
-                   "    --help                   see this help message\n"
-                   "    --export FORMAT          where FORMAT is 'svg' or 'ppm'\n"
-                   "    --menu-file FILE         use savefile FILE as menu\n");
-
-            exit(0);
-        }
+        if (strcmp(arg, "--help") == 0) exitWithHelp(); 
         else if (strcmp(arg, "--export") == 0) {
-            assert(i + 1 < argc);
+            if (i + 1 >= argc) exitWithHelp();
             i++;
             arg = argv[i];
-            assert(strcmp(arg, "svg") == 0 || strcmp(arg, "svg") == 0);
+            if (strcmp(arg, "svg") != 0 && strcmp(arg, "ppm") != 0)
+                exitWithHelp();
             exportAs = arg;
         }
         else if (strcmp(arg, "--menu-file") == 0) {
-            assert(i + 1 < argc);
+            if (i + 1 >= argc) exitWithHelp();
             i++;
             menuFile = argv[i];
         }
-        else savefile = arg;
+        else {
+            gotSaveFile = arg;
+            savefile = arg;
+        }
     }
 
     {
@@ -756,10 +787,12 @@ main(int argc, char **argv)
     }
 
     if (exportAs != NULL) {
-        if (strcmp(exportAs, "svg"))
-            gridToSvg(stdout, &state);
-        else
-            assert(0); //XXX
+        if (gotSaveFile == NULL) {
+            fprintf(stderr, "provide a savefile to export\n\n");
+            exitWithHelp();
+        }
+        if (strcmp(exportAs, "svg") == 0)     exportSVG(stdout, &state);
+        else                                  exportPPM(stdout, &state);
         exit(0);
     }
 
