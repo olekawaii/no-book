@@ -5,8 +5,16 @@ depends on raylib
     cd src
     cc -lm -lraylib -g main.c
     mkdir -p ~/.local/share/no-book
-    mv src/overlay.nb ~/.local/share/no-book/overlay.nb
+    mv overlay.nb ~/.local/share/no-book/overlay.nb
 
+
+
+Usage: no-book [OPTION]... [SAVEFILE]
+Options:
+
+    --help                   see this help message
+    --export FORMAT          where FORMAT is 'svg' or 'ppm'
+    --menu-file FILE         use savefile FILE as menu
 
 
 
@@ -14,7 +22,7 @@ MENU FILE
 
 A menu file is a save file that describes the appearence 
 of the main menu. There is one provided at src/overlay.nb
-however you can make your own with a simple save file:
+however you can easily make your own:
 
     /*
      * To create a menu file, draw the strokes in
@@ -35,7 +43,15 @@ however you can make your own with a simple save file:
         Action_ExitMenu         = 7,
         Action_Save             = 8,
         Action_ChangeTheme      = 9,
+
+        Action_Eraser           = 10,
     };
 
 
+
+EXAMPLES
+
+Export to png using ffmpeg:
+
+    $ no-book --export ppm <savefile> | ffmpeg -i - out.png
 

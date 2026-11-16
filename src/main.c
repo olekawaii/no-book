@@ -15,6 +15,8 @@
 #define CANVAS_HEIGHT         1024
 #define HIGHLIGHTER_OPACITY   0.9
 
+#define DEBUG 0
+
 bool needsToEnterMenu   = 0;
 int previousNum         = 0;
 int penStart            = 0;
@@ -273,7 +275,7 @@ gridToSvg(FILE* file, State *state)
         fprintf(file,
                 "\" \n"
                 "        stroke=\"rgb(%d, %d, %d, 255)\" \n"
-                "        stroke-width=\"4\" \n"
+                "        stroke-width=\"3\" \n"
                 "        fill=\"none\" />\n",
                 c.r, c.g, c.b);
     }
@@ -296,13 +298,15 @@ applyToolToPixel(int x, int y, State *state, uint16_t strokeIndex) {
             && num         != 0 
             && num - 1     <  menuStrokesStart)
     {
-        printf("TTOAHUNAUN\n");
         if (num != strokeIndex) previousNum = strokeIndex;
         // XXX handle highlighter
         state->needsFullRedraw = true;
         num = num - 1 - penStart;
         switch (num) {
-        case Action_Save        :  state->needsSaving = true;        break;
+        case Action_Save        :  
+            state->needsToExitMenu = true;
+            state->needsSaving = true;        
+            break;
         case Action_ChangeTheme :  state->needsThemeChange = true;   break;
         case Action_UseBlack    :  state->colorChange = Black;       break;
         case Action_UseRed      :  state->colorChange = Red;         break;
@@ -312,9 +316,11 @@ applyToolToPixel(int x, int y, State *state, uint16_t strokeIndex) {
         case Action_UseMagenta  :  state->colorChange = Magenta;     break;
         case Action_UseCyan     :  state->colorChange = Cyan;        break;
         case Action_ExitMenu    :  state->needsToExitMenu = true;    break;
-        case Action_Eraser      :  state->useEraser = true;          break;
+        case Action_Eraser      :  
+            state->needsToExitMenu = true;
+            state->useEraser = true;          
+            break;
         }
-        printf("num: %d\n", num);
     }
 
     switch (state->tool) {
@@ -669,7 +675,6 @@ char* getNobookDirectory() {
     assert(home != NULL);
     sprintf(path, "%s/.local/share/no-book/", home);
     //free(home);
-    printf("%s\n", home);
     return(path);
 }
 
@@ -686,14 +691,48 @@ main(int argc, char **argv)
     char                *path, *dirend;
     enum Tool           previousTool;
 
+    char *savefile = NULL;
+    char *exportAs = NULL;
+    char *menuFile = NULL;
+
+
     path = getNobookDirectory();
     dirend = path + strlen(path);
 
+    for (int i = 1; i < argc; i++) {
+        char *arg = argv[i];
+        if (strcmp(arg, "--help") == 0) {
+            printf("Usage: no-book [OPTION]... [SAVEFILE]\n"
+                   "Options: \n\n"
+                   "    --help                   see this help message\n"
+                   "    --export FORMAT          where FORMAT is 'svg' or 'ppm'\n"
+                   "    --menu-file FILE         use savefile FILE as menu\n");
+
+            exit(0);
+        }
+        else if (strcmp(arg, "--export") == 0) {
+            assert(i + 1 < argc);
+            i++;
+            arg = argv[i];
+            assert(strcmp(arg, "svg") == 0 || strcmp(arg, "svg") == 0);
+            exportAs = arg;
+        }
+        else if (strcmp(arg, "--menu-file") == 0) {
+            assert(i + 1 < argc);
+            i++;
+            menuFile = argv[i];
+        }
+        else savefile = arg;
+    }
+
     {
-        //  save stroke history from overlay.nb to (other) 
-        //  to use for the menu
-        strcpy(dirend, "overlay.nb");
-        int fd = open(path, O_RDONLY);
+        // tempMenuFile because (path) might be overwritten
+        char *tempMenuFile = menuFile;
+        if (menuFile == NULL) {
+            strcpy(dirend, "overlay.nb");
+            tempMenuFile = path;
+        }
+        int fd = open(tempMenuFile, O_RDONLY);
         assert(fd != -1);
         State temp = newState(0, 0);
         readFile(fd, &temp);
@@ -705,23 +744,33 @@ main(int argc, char **argv)
     currentStroke = NULL;
     state         = newState(CANVAS_WIDTH, CANVAS_HEIGHT);
 
-    //SetConfigFlags(FLAG_WINDOW_RESIZABLE);
+    if (savefile != NULL) {
+        int   fd   = open(savefile, O_RDONLY);
+        assert(fd != -1);
+        readFile(fd, &state);
+        close(fd);
+#if DEBUG
+        fprintf(stderr, "successfully loaded!\n");
+#endif
+        state.needsFullRedraw = true;
+    }
+
+    if (exportAs != NULL) {
+        if (strcmp(exportAs, "svg"))
+            gridToSvg(stdout, &state);
+        else
+            assert(0); //XXX
+        exit(0);
+    }
+
+    SetTraceLogLevel(LOG_ERROR);
+
     InitWindow(state.width, state.height, "game");
     SetTargetFPS(120);
 
     img       = GenImageColor(CANVAS_WIDTH, CANVAS_HEIGHT, BLANK);
     texture   = LoadTextureFromImage(img);
     UnloadImage(img);
-
-    if (argc > 1) {
-        char* file = argv[1];
-        int   fd   = open(file, O_RDONLY);
-        assert(fd != -1);
-        readFile(fd, &state);
-        close(fd);
-        printf("successfully loaded!\n");
-        state.needsFullRedraw = true;
-    }
 
     while (!WindowShouldClose()) {
         BeginDrawing();
@@ -739,7 +788,9 @@ main(int argc, char **argv)
                 state.width = newSize;
             }
             else state.height = (float) state.width * 4/5;
-            printf("dimensions: %dx%d\n", state.width, state.height);
+#if DEBUG
+            fprintf(stderr, "dimensions: %dx%d\n", state.width, state.height);
+#endif
             int size = state.width * state.height;
             state.gridOfIndecies = realloc(state.gridOfIndecies, 
                                            size * sizeof(uint16_t));
@@ -855,9 +906,27 @@ main(int argc, char **argv)
             case KEY_L:        state.theme = rosePineDawn;          break;
             case KEY_K:        state.theme = everforestLight;       break;
             case KEY_N:        state.theme = flexokiLight;          break;
-            case KEY_S:        state.needsSaving = true;            break;
+            case KEY_S:        
+                state.needsToExitMenu = true;
+                state.needsSaving = true;            
+                break;
             case KEY_Z:        needsToEnterMenu  = true;            break;
             }
+        }
+
+        struct History temp;
+
+        if (state.needsToExitMenu) {
+            if (inMenu) {
+                state.history.penStrokes.length = menuStrokesStart;
+                temp = state.history;
+                state.history = other;
+                other = temp;
+                inMenu = false;
+            }
+            state.needsToExitMenu = false;
+            state.needsFullRedraw = true;
+            drawingStroke = false;
         }
 
         if (state.colorChange != 0) {
@@ -867,24 +936,12 @@ main(int argc, char **argv)
             if (drawingStroke)     currentStroke->color = state.colorChange;
         }
 
-        if (state.needsSaving) {
-            state.needsSaving = false;
-            int fd = open("out.nb", O_WRONLY | O_CREAT, 0666);
-            assert(fd != -1);
-            writeFile(fd, &state);
-            close(fd);
-            printf("saved\n");
-        }
-
         if (state.useEraser) {
             state.useEraser = false;
             previousTool = state.tool;
             state.tool = Eraser;
             //drawingStroke = false;
-            state.needsToExitMenu = true;
         }
-
-        struct History temp;
 
         if (needsToEnterMenu) {
             if (!inMenu) {
@@ -904,31 +961,32 @@ main(int argc, char **argv)
             state.theme = themes[themeIndex];
         }
 
-        if (state.needsToExitMenu) {
-            if (inMenu) {
-                state.history.penStrokes.length = menuStrokesStart;
-                temp = state.history;
-                state.history = other;
-                other = temp;
-                inMenu = false;
-            }
-            state.needsToExitMenu = false;
-            state.needsFullRedraw = true;
-            drawingStroke = false;
+        if (state.needsSaving) {
+            state.needsSaving = false;
+            if (savefile == NULL) savefile = "out.nb";
+            int fd = open(savefile, O_WRONLY | O_CREAT, 0666);
+            assert(fd != -1);
+            writeFile(fd, &state);
+            close(fd);
+            fprintf(stderr, "saved to %s\n", savefile);
         }
 
         if (state.needsRedraw || state.needsFullRedraw) {
             state.needsRedraw = false;
             if (state.needsFullRedraw) {
                 state.needsFullRedraw = false;
-                printf("drew entire frame\n");
+#if DEBUG
+                fprintf(stderr, "drew entire frame\n");
+#endif
                 Color c = state.theme[White];
                 for (int i = 0; i < state.width * state.height; i++)
                     state.colorGrid[i] = c;
                 drawCanvas2(&state, state.colorGrid);
             }
             UpdateTexture(texture, state.colorGrid);
-            printf("updated frame\n");
+#if DEBUG
+            fprintf(stderr, "updated frame\n");
+#endif
             state.needsRedraw = false;
         }
 
@@ -939,9 +997,5 @@ main(int argc, char **argv)
                        0.0, WHITE);
         EndDrawing();
     }
-    FILE* f = fopen("out.svg", "w");
-    gridToSvg(f, &state);
-    CloseWindow();
-    free(state.colorGrid);
     return 0;
 }
