@@ -44,19 +44,29 @@ enum ColorT {
  */
 
 enum Action {
-    Action_UseBlack         = 0,
-    Action_UseRed           = 1,
-    Action_UseGreen         = 2,
-    Action_UseYellow        = 3,
-    Action_UseBlue          = 4,
-    Action_UseMagenta       = 5,
-    Action_UseCyan          = 6,
+    Action_UseBlack         = 0, // do not change order
+    Action_UseRed           = 1, //
+    Action_UseGreen         = 2, //
+    Action_UseYellow        = 3, //
+    Action_UseBlue          = 4, //
+    Action_UseMagenta       = 5, //
+    Action_UseCyan          = 6, //
 
     Action_ExitMenu         = 7,
     Action_Save             = 8,
     Action_ChangeTheme      = 9,
 
     Action_Eraser           = 10,
+};
+
+enum Message {
+    Message_ChangeColor     = 1 << 0,  // save color to state.colorChange
+    Message_ChangeTool      = 1 << 1,  // save tool to state.toolChange
+    Message_ExitMenu        = 1 << 2,
+    Message_EnterMenu       = 1 << 3,
+    Message_Save            = 1 << 4,
+    Message_ChangeTheme     = 1 << 5,
+    Message_RedrawFrame     = 1 << 6,
 };
 
 #include "themes.c"
@@ -121,17 +131,13 @@ typedef struct State {
     enum Tool           tool;
     Color             * theme;
     bool                needsRedraw;
-    bool                needsFullRedraw;
     enum Markings       markings;
     struct History      history;
     uint16_t          * gridOfIndecies;
     Color             * colorGrid;
-    int                 leftPadding;
-    bool                needsSaving;
-    enum ColorT         colorChange;
-    bool                needsToExitMenu;
-    bool                needsThemeChange;
-    bool                useEraser;
+    enum ColorT         colorChange;    // used by Message_ChangeColor
+    enum Tool           toolChange;     // used by Message_ChangeTool
+    int                 messages;
 } State;
 
 DynArr            newArr(int);
@@ -301,7 +307,7 @@ exportPPM(FILE* file, State *state)
         if (c.r + c.b + c.g == 0) {
             c = state->theme[White];
         }
-        fprintf(stdout, "%d %d %d\n", c.r, c.g, c.b);
+        fprintf(file, "%d %d %d\n", c.r, c.g, c.b);
     }
 
 }
@@ -324,25 +330,33 @@ applyToolToPixel(int x, int y, State *state, uint16_t strokeIndex) {
     {
         if (num != strokeIndex) previousNum = strokeIndex;
         // XXX handle highlighter
-        state->needsFullRedraw = true;
+        state->messages |= Message_RedrawFrame;
         num = num - 1 - penStart;
         switch (num) {
         case Action_Save        :  
-            state->needsToExitMenu = true;
-            state->needsSaving = true;        
+            state->messages |= Message_ExitMenu | Message_Save;
+            break; 
+        case Action_ChangeTheme :  
+            state->messages |= Message_ChangeTheme;   
             break;
-        case Action_ChangeTheme :  state->needsThemeChange = true;   break;
-        case Action_UseBlack    :  state->colorChange = Black;       break;
-        case Action_UseRed      :  state->colorChange = Red;         break;
-        case Action_UseGreen    :  state->colorChange = Green;       break;
-        case Action_UseYellow   :  state->colorChange = Yellow;      break;
-        case Action_UseBlue     :  state->colorChange = Blue;        break;
-        case Action_UseMagenta  :  state->colorChange = Magenta;     break;
-        case Action_UseCyan     :  state->colorChange = Cyan;        break;
-        case Action_ExitMenu    :  state->needsToExitMenu = true;    break;
+        case Action_UseBlack    :  
+        case Action_UseRed      :
+        case Action_UseGreen    :
+        case Action_UseYellow   :
+        case Action_UseBlue     :
+        case Action_UseMagenta  :
+        case Action_UseCyan     :
+            enum ColorT col = num - Action_UseBlack;
+            if (col == White) col = Black;
+            state->colorChange = col;
+            state->messages |= Message_ChangeColor;
+            break;
+        case Action_ExitMenu    :  
+            state->messages |= Message_ExitMenu;
+            break;
         case Action_Eraser      :  
-            state->needsToExitMenu = true;
-            state->useEraser = true;          
+            state->messages |= Message_ExitMenu | Message_ChangeTool;
+            state->toolChange = Eraser;
             break;
         }
     }
@@ -606,16 +620,13 @@ newState(int width, int height)
         .tool               = Pen,
         .theme              = rosePineDawn,
         .needsRedraw        = true,
-        .needsFullRedraw    = true,
         .markings           = Grid,
         .history            = newhistory(),
         .gridOfIndecies     = gridOfIndecies,
         .colorGrid          = colorGrid,
-        .leftPadding        = 0,
         .colorChange        = 0,
-        .needsToExitMenu    = 0, 
-        .needsThemeChange   = 0,
-        .useEraser          = 0,
+        .toolChange         = 0,
+        .messages           = 0,
     };
     return state;
 }
@@ -771,7 +782,7 @@ main(int argc, char **argv)
         other = temp.history;
         close(fd);
     }
-    drawingStroke = state.needsFullRedraw = false;
+    drawingStroke = false;
     currentStroke = NULL;
     state         = newState(CANVAS_WIDTH, CANVAS_HEIGHT);
 
@@ -783,7 +794,7 @@ main(int argc, char **argv)
 #if DEBUG
         fprintf(stderr, "successfully loaded!\n");
 #endif
-        state.needsFullRedraw = true;
+        state.messages |= Message_RedrawFrame;
     }
 
     if (exportAs != NULL) {
@@ -811,13 +822,12 @@ main(int argc, char **argv)
 
         state.needsRedraw = false;
         if (IsWindowResized()) {
-            state.needsFullRedraw = true;
+            state.messages |= Message_RedrawFrame;
             state.width = GetRenderWidth();
             state.height = GetRenderHeight();
             int expectedHeight = (float)state.width * 4/5;
             if (state.height < expectedHeight) {
                 int newSize = (float)state.height * 5/4;
-                state.leftPadding = (state.width - newSize) / 2;
                 state.width = newSize;
             }
             else state.height = (float) state.width * 4/5;
@@ -839,7 +849,6 @@ main(int argc, char **argv)
 
         mouse = GetMousePosition();
 
-        mouse.x -= state.leftPadding;
         mouse.x /= scalex;
         mouse.y /= scaley;
 
@@ -868,12 +877,12 @@ main(int argc, char **argv)
             };
             push(strokeList, &s);
             currentStroke = atIndex(strokeList, strokeList->length - 1);
-            state.needsFullRedraw = true;
+            state.messages |= Message_RedrawFrame;
         }
 
         if (IsMouseButtonDown(MOUSE_BUTTON_LEFT) && drawingStroke) {
             if (state.history.points.length == 0) {
-                state.needsFullRedraw = true;
+                state.messages |= Message_RedrawFrame;
                 goto skip;
             }
             Position previous = 
@@ -888,14 +897,15 @@ main(int argc, char **argv)
                 Position p = (Position) { x1, y1 };
                 if (state.tool == Eraser) {
                     plotLine2(x0, y0, x1, y1, &state, strokeList->length - 1);
-                    state.needsFullRedraw = true;
+                    state.messages |= Message_RedrawFrame;
                 } 
                 else {
                     push(&state.history.points, &p);
                     currentStroke->numPoints++;
                     if (state.tool == Pen) {
                         plotLine2(x0, y0, x1, y1, &state, strokeList->length - 1);
-                    } else state.needsFullRedraw = true;
+                    } 
+                    else state.messages |= Message_RedrawFrame;
                 }
                 state.needsRedraw = true;
             }
@@ -906,7 +916,7 @@ main(int argc, char **argv)
             if (numPoints == 1) {
                 strokeList->length--;
                 state.history.points.length--;
-                state.needsFullRedraw = true;
+                state.messages |= Message_RedrawFrame;
             }
             if (state.tool == Eraser) state.tool = previousTool;
             drawingStroke = false;
@@ -917,39 +927,18 @@ main(int argc, char **argv)
 
         int key = GetKeyPressed();
         if (key != 0) {
-            state.needsFullRedraw = true;
+            state.messages |= Message_RedrawFrame;
             switch (key) {
-            case KEY_ZERO:     state.colorChange = White;           break;
-            case KEY_ONE:      state.colorChange = Red;             break;
-            case KEY_TWO:      state.colorChange = Green;           break;
-            case KEY_THREE:    state.colorChange = Yellow;          break;
-            case KEY_FOUR:     state.colorChange = Blue;            break;
-            case KEY_FIVE:     state.colorChange = Magenta;         break;
-            case KEY_SIX:      state.colorChange = Cyan;            break;
-            case KEY_SEVEN:    state.colorChange = Black;           break;
-
-            case KEY_H:        state.tool = Highlighter;            break;
-            case KEY_P:        state.tool = Pen;                    break;
-            case KEY_E:        state.useEraser = true;              break;
-                            
-            case KEY_T:        state.markings = None;               break;
-                            
-            case KEY_J:        state.theme = kanagawaLotus;         break;
-            case KEY_M:        state.theme = gruvboxMaterialLight;  break;
-            case KEY_L:        state.theme = rosePineDawn;          break;
-            case KEY_K:        state.theme = everforestLight;       break;
-            case KEY_N:        state.theme = flexokiLight;          break;
-            case KEY_S:        
-                state.needsToExitMenu = true;
-                state.needsSaving = true;            
-                break;
-            case KEY_Z:        needsToEnterMenu  = true;            break;
+            case KEY_H:  state.tool = Highlighter;              break;
+            case KEY_P:  state.tool = Pen;                      break;
+            case KEY_T:  state.markings = None;                 break;
+            case KEY_Z:  state.messages |= Message_EnterMenu;   break;
             }
         }
 
         struct History temp;
 
-        if (state.needsToExitMenu) {
+        if (state.messages & Message_ExitMenu) {
             if (inMenu) {
                 state.history.penStrokes.length = menuStrokesStart;
                 temp = state.history;
@@ -957,45 +946,46 @@ main(int argc, char **argv)
                 other = temp;
                 inMenu = false;
             }
-            state.needsToExitMenu = false;
-            state.needsFullRedraw = true;
+            state.messages &= ~Message_ExitMenu;
+            state.messages |= Message_RedrawFrame;
             drawingStroke = false;
         }
 
-        if (state.colorChange != 0) {
+        if (state.messages & Message_ChangeColor) {
+            state.messages &= ~Message_ChangeColor;
             enum ColorT *colorptr = &state.penOptions.color;
             if (state.tool == Highlighter) colorptr = &state.highlighterOptions.color;
             *colorptr = state.colorChange;
             if (drawingStroke)     currentStroke->color = state.colorChange;
         }
 
-        if (state.useEraser) {
-            state.useEraser = false;
+        if (state.messages & Message_ChangeTool) {
+            state.messages &= ~Message_ChangeTool;
             previousTool = state.tool;
-            state.tool = Eraser;
-            //drawingStroke = false;
+            state.tool = state.toolChange;
+            drawingStroke = false;
         }
 
-        if (needsToEnterMenu) {
+        if (state.messages & Message_EnterMenu) {
             if (!inMenu) {
                 temp = state.history;
                 state.history = other;
                 other = temp;
                 inMenu = true;
             }
-            needsToEnterMenu = false;
-            state.needsFullRedraw = true;
+            state.messages &= ~Message_EnterMenu;
+            state.messages |= Message_RedrawFrame;
             drawingStroke = false;
         }
 
-        if (state.needsThemeChange) {
-            state.needsThemeChange = false;
+        if (state.messages & Message_ChangeTheme) {
+            state.messages &= ~Message_ChangeTheme;
             themeIndex = (themeIndex + 1) % themeCount;
             state.theme = themes[themeIndex];
         }
 
-        if (state.needsSaving) {
-            state.needsSaving = false;
+        if (state.messages & Message_Save) {
+            state.messages &= ~Message_Save;
             if (savefile == NULL) savefile = "out.nb";
             int fd = open(savefile, O_WRONLY | O_CREAT, 0666);
             assert(fd != -1);
@@ -1004,10 +994,10 @@ main(int argc, char **argv)
             fprintf(stderr, "saved to %s\n", savefile);
         }
 
-        if (state.needsRedraw || state.needsFullRedraw) {
+        if (state.needsRedraw || state.messages & Message_RedrawFrame) {
             state.needsRedraw = false;
-            if (state.needsFullRedraw) {
-                state.needsFullRedraw = false;
+            if (state.messages & Message_RedrawFrame) {
+                state.messages &= ~Message_RedrawFrame;
 #if DEBUG
                 fprintf(stderr, "drew entire frame\n");
 #endif
@@ -1026,7 +1016,7 @@ main(int argc, char **argv)
         Rectangle rect = {0, 0, state.width, state.height};
         DrawTexturePro(texture, 
                        rect, rect, 
-                       (Vector2){-state.leftPadding, 0}, 
+                       (Vector2){0, 0}, 
                        0.0, WHITE);
         EndDrawing();
     }
